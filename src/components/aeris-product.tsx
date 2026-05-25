@@ -29,6 +29,8 @@ type Draft = {
   accountName: string;
   primary: string;
   tagline: string;
+  logoUrl: string;
+  heroImageUrl: string;
   productsText: string;
 };
 
@@ -51,6 +53,8 @@ const defaultDraft: Draft = {
   accountName: "Terra Basket Foods",
   primary: "#1A3C2B",
   tagline: "Fresh provisions delivered across Lagos.",
+  logoUrl: "",
+  heroImageUrl: "",
   productsText:
     "Smoked Jollof Party Tray | 18500 | Family-size smoky jollof rice with fried plantain\nPalm Oil Pantry Set | 14500 | Local pantry staples packed for weekly cooking"
 };
@@ -65,6 +69,8 @@ function buildStore(draft: Draft): Store {
     name: draft.storeName,
     city: draft.city,
     category: draft.category,
+    logoUrl: draft.logoUrl,
+    heroImageUrl: draft.heroImageUrl,
     bankVerified: draft.accountNumber.length === 10,
     published: false,
     suspended: false,
@@ -122,6 +128,10 @@ function rgbToHex(r: number, g: number, b: number) {
 
 function isSlugAvailable(slug: string, currentSlug?: string) {
   return slug.length >= 3 && (slug === currentSlug || !RESERVED_SLUGS.has(slug));
+}
+
+function persistState(nextState: State) {
+  localStorage.setItem("aeris-product-state", JSON.stringify(nextState));
 }
 
 export function AerisProduct() {
@@ -249,9 +259,11 @@ function BrandNav({ state, update, go }: Pick<CommonProps, "state" | "update" | 
         </button>
         <button
           className="btn-primary"
-          onClick={() =>
-            update((current) => ({ ...current, store: { ...current.store, published: !current.store.published } }))
-          }
+          onClick={() => {
+            const nextState = { ...state, store: { ...state.store, published: !state.store.published } };
+            persistState(nextState);
+            update(() => nextState);
+          }}
         >
           {state.store.published ? "Unpublish" : "Publish"}
         </button>
@@ -744,6 +756,8 @@ function Dashboard({ state, update, go, notify, section }: CommonProps & { secti
 }
 
 function StoreOverview({ state, go, balance }: { state: State; go: (path: string) => void; balance: number }) {
+  const [livePrompt, setLivePrompt] = useState("Refresh the hero copy and make the storefront feel more premium.");
+
   return (
     <>
       <div className="stats-grid">
@@ -754,6 +768,53 @@ function StoreOverview({ state, go, balance }: { state: State; go: (path: string
       <h2>Store overview</h2>
       <p>Your storefront is published at <strong>{state.store.slug}.aeris.store</strong>. Manage products, orders, payouts, and settings from the navigation above.</p>
       <div className="row"><button className="btn-primary" onClick={() => go("/products")}>Add product +</button><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>View storefront ↗</button></div>
+      <div className="two-column" style={{ marginTop: 32 }}>
+        <div className="form-card corner-marked">
+          <Corners />
+          <span className="label">Live store AI editor</span>
+          <h3>Prompt AI to change the live storefront</h3>
+          <p>Use this after publishing to rewrite copy, improve merchandising, or generate a better hero direction for the live store.</p>
+          <Area id="live-ai" label="Prompt" rows={5} value={livePrompt} onChange={setLivePrompt} />
+          <button
+            className="btn-primary"
+            onClick={() => {
+              const generatedImage = livePrompt.toLowerCase().includes("background") || livePrompt.toLowerCase().includes("hero")
+                ? `https://images.aeris.store/generated/${slugify(state.store.name)}-hero.jpg`
+                : state.store.heroImageUrl || "";
+              localStorage.setItem(
+                "aeris-product-state",
+                JSON.stringify({
+                  ...state,
+                  store: {
+                    ...state.store,
+                    heroTitle: `${state.store.name.toUpperCase()} REIMAGINED.`,
+                    heroCopy: `AI update: ${livePrompt}`,
+                    heroImageUrl: generatedImage
+                  },
+                  activity: [`AI updated live store: ${livePrompt}`, ...state.activity]
+                })
+              );
+              window.location.href = "/store";
+            }}
+          >
+            Apply to live store
+          </button>
+        </div>
+        <div className="form-card corner-marked">
+          <Corners />
+          <span className="label">Brand assets</span>
+          <h3>Logo and hero image</h3>
+          <p>Set the logo shown in the storefront nav and the background art used behind the hero.</p>
+          <div className="row" style={{ alignItems: "flex-start", marginBottom: 16 }}>
+            {state.store.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${state.store.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
+            {state.store.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${state.store.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
+          </div>
+          <div className="row">
+            <button className="btn-ghost" onClick={() => go("/settings")}>Edit store assets</button>
+            <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>Preview live storefront</button>
+          </div>
+        </div>
+      </div>
     </>
   );
 }
@@ -827,6 +888,12 @@ function SettingsManager({ state, update }: { state: State; update: CommonProps[
       <div className="field-stack" style={{ maxWidth: 720 }}>
         <Field id="settings-name" label="Store name" value={state.store.name} onChange={(name) => update((current) => ({ ...current, store: { ...current.store, name } }))} />
         <Field id="settings-tagline" label="Tagline" value={state.store.heroCopy} onChange={(heroCopy) => update((current) => ({ ...current, store: { ...current.store, heroCopy } }))} />
+        <Field id="settings-logo" label="Logo URL" value={state.store.logoUrl || ""} onChange={(logoUrl) => update((current) => ({ ...current, draft: { ...current.draft, logoUrl }, store: { ...current.store, logoUrl } }))} />
+        <Field id="settings-hero-image" label="Hero background image URL" value={state.store.heroImageUrl || ""} onChange={(heroImageUrl) => update((current) => ({ ...current, draft: { ...current.draft, heroImageUrl }, store: { ...current.store, heroImageUrl } }))} />
+        <div className="row" style={{ alignItems: "flex-start" }}>
+          {state.store.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${state.store.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
+          {state.store.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${state.store.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
+        </div>
         <p className="mono" style={{ color: "var(--color-gold)", fontSize: 10 }}>⚠ Slug is locked after publish and cannot be changed.</p>
       </div>
     </>
@@ -847,16 +914,40 @@ function PublicStore({ state, update, go, notify }: CommonProps) {
 }
 
 function StorefrontRenderer({ store, products, cart, addToCart, go, preview }: { store: Store; products: Product[]; cart: CartLine[]; addToCart: (product: Product) => void; go?: (path: string) => void; preview?: boolean }) {
+  const [searchQuery, setSearchQuery] = useState("");
   const featured = products.filter((product) => product.featured && product.source === "merchant" && product.inStock).slice(0, 4);
+  const filteredProducts = products.filter((product) => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+
+    return product.name.toLowerCase().includes(query) || (product.description || "").toLowerCase().includes(query);
+  });
   if (!preview && !store.published) {
     return <main className="storefront-page store-hero"><div><h2>{store.name}</h2><StatusBadge>Temporarily unavailable</StatusBadge><p>This store is currently unavailable. Please check back soon.</p><span className="label">Powered by Aeris</span></div></main>;
   }
   return (
     <main className="storefront-page" style={{ "--store-primary": store.theme.primary } as CSSProperties}>
-      <nav className="store-nav"><strong style={{ fontFamily: "var(--font-display)", color: "var(--color-forest)" }}>{store.name}</strong><div className="row"><button className="nav-link">Search</button><button className="btn-ghost" onClick={() => go?.("/cart")}>Cart <span className="cart-pill">{cart.reduce((sum, line) => sum + line.quantity, 0)}</span></button></div></nav>
-      <section className="store-hero"><div className="store-hero-inner"><h1>{store.name.toUpperCase()}</h1><p className="mono">{store.heroCopy}</p><button className="btn-primary">Shop now →</button></div></section>
+      <nav className="store-nav">
+        <div className="store-brand">
+          {store.logoUrl ? <div className="store-logo" style={{ backgroundImage: `url(${store.logoUrl})` }} /> : null}
+          <strong style={{ fontFamily: "var(--font-display)", color: "var(--color-forest)" }}>{store.name}</strong>
+        </div>
+        <div className="row">
+          <input className="store-search-input" aria-label="Search products" placeholder="Search products" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} />
+          <button className="btn-ghost" onClick={() => go?.("/cart")}>Cart <span className="cart-pill">{cart.reduce((sum, line) => sum + line.quantity, 0)}</span></button>
+        </div>
+      </nav>
+      <section className="store-hero" style={store.heroImageUrl ? { backgroundImage: `linear-gradient(rgba(247,247,245,0.78), rgba(247,247,245,0.78)), url(${store.heroImageUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}>
+        <div className="store-hero-inner">
+          <h1>{store.name.toUpperCase()}</h1>
+          <p className="mono">{store.heroCopy}</p>
+          <button className="btn-primary" onClick={() => document.getElementById("store-products")?.scrollIntoView({ behavior: "smooth", block: "start" })}>Shop now →</button>
+        </div>
+      </section>
       <section className="section-block"><div className="container"><span className="label">Featured</span><h2>Hand-picked for you.</h2><div className="store-product-grid">{(featured.length ? featured : products).map((product) => <StoreProductCard key={product.id} product={product} addToCart={addToCart} />)}</div></div></section>
-      <section className="section-block"><div className="container"><span className="label">All products</span><h2>The collection.</h2><div className="store-product-grid">{products.map((product) => <StoreProductCard key={`${product.id}-all`} product={product} addToCart={addToCart} />)}</div></div></section>
+      <section className="section-block" id="store-products"><div className="container"><span className="label">All products</span><h2>The collection.</h2><div className="store-product-grid">{filteredProducts.map((product) => <StoreProductCard key={`${product.id}-all`} product={product} addToCart={addToCart} />)}</div></div></section>
       <footer className="section-block"><div className="container row" style={{ justifyContent: "space-between" }}><span>{store.name} · {store.city} · {store.category}</span><span className="label">Powered by Aeris</span></div></footer>
     </main>
   );
@@ -887,9 +978,50 @@ function CartPage({ state, go }: CommonProps) {
       <main className="container section-block page-with-store-nav">
         <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>← Continue shopping</button>
         <h2 style={{ marginTop: 32 }}>Your cart</h2>
-        {products.length === 0 ? <div className="empty-state"><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>Continue shopping →</button></div> : <div className="two-column"><div className="table">{products.map(({ line, product }) => <div className="table-row" key={line.productId}><strong>{product?.name}</strong><span>{money(product?.price || 0)}</span><span>Qty {line.quantity}</span><span>{money((product?.price || 0) * line.quantity)}</span><span /></div>)}</div><div className="form-card corner-marked"><Corners /><span className="label">Order summary</span><p>Subtotal: {money(totals.subtotal)}</p><p>Logistics: {money(totals.logisticsFee)}</p><h3>Total: {money(totals.total)}</h3><button className="btn-primary" onClick={() => go("/checkout")}>Proceed to checkout →</button></div></div>}
+        {products.length === 0 ? <div className="empty-state"><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>Continue shopping →</button></div> : <CartContents state={state} go={go} totals={totals} />}
     </main>
     </>
+  );
+}
+
+function CartContents({ state, go, totals }: { state: State; go: (path: string) => void; totals: ReturnType<typeof calculateCheckout> }) {
+  function mutateCart(productId: string, nextQuantity: number) {
+    const saved = localStorage.getItem("aeris-product-state");
+    if (!saved) {
+      return;
+    }
+
+    const current = JSON.parse(saved) as State;
+    const cart = nextQuantity <= 0
+      ? current.cart.filter((line) => line.productId !== productId)
+      : current.cart.map((line) => line.productId === productId ? { ...line, quantity: nextQuantity } : line);
+    localStorage.setItem("aeris-product-state", JSON.stringify({ ...current, cart }));
+    window.location.href = "/cart";
+  }
+
+  const products = state.cart
+    .map((line) => ({ line, product: state.store.products.find((product) => product.id === line.productId) }))
+    .filter((entry) => entry.product);
+
+  return (
+    <div className="two-column">
+      <div className="table">
+        {products.map(({ line, product }) => (
+          <div className="table-row cart-table-row" key={line.productId}>
+            <strong>{product?.name}</strong>
+            <span>{money(product?.price || 0)}</span>
+            <div className="qty-controls">
+              <button className="btn-ghost qty-button" onClick={() => mutateCart(line.productId, line.quantity - 1)}>-</button>
+              <span>Qty {line.quantity}</span>
+              <button className="btn-ghost qty-button" onClick={() => mutateCart(line.productId, line.quantity + 1)}>+</button>
+            </div>
+            <span>{money((product?.price || 0) * line.quantity)}</span>
+            <button className="btn-danger" onClick={() => mutateCart(line.productId, 0)}>Remove</button>
+          </div>
+        ))}
+      </div>
+      <div className="form-card corner-marked"><Corners /><span className="label">Order summary</span><p>Subtotal: {money(totals.subtotal)}</p><p>Logistics: {money(totals.logisticsFee)}</p><h3>Total: {money(totals.total)}</h3><button className="btn-primary" onClick={() => go("/checkout")}>Proceed to checkout →</button></div>
+    </div>
   );
 }
 
@@ -927,7 +1059,6 @@ function OrderStatus({ state, go }: CommonProps) {
       <main className="container section-block page-with-store-nav">
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 32 }}>
           <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>← Back to store</button>
-          <button className="btn-ghost" onClick={() => go("/store")}>Merchant dashboard →</button>
         </div>
         {order ? <><StatusBadge>Payment confirmed</StatusBadge><h2>Order status</h2><p className="mono">#{order.reference}</p><div className="form-card"><h3>{order.status.toUpperCase()}</h3><p>Delivery to {order.delivery.fullName}, {order.delivery.address}, {order.delivery.city}.</p></div></> : <div className="empty-state">Order not found.</div>}
       </main>

@@ -35,6 +35,8 @@ export type Store = {
   name: string;
   city: SupportedCity;
   category: string;
+  logoUrl?: string;
+  heroImageUrl?: string;
   ownerEmail?: string;
   bankVerified: boolean;
   published: boolean;
