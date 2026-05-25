@@ -872,6 +872,10 @@ function Login({ state, update, go, notify }: CommonProps) {
     <main className="wizard-shell" style={{ display: "grid", placeItems: "center" }}>
       <div className="form-card corner-marked" style={{ width: "min(480px, calc(100% - 32px))" }}>
         <Corners />
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap" }}>
+          <button className="btn-ghost" onClick={() => go("/")}>← Back home</button>
+          {state.auth.loggedIn ? <button className="btn-ghost" onClick={() => go("/store")}>Go to dashboard →</button> : null}
+        </div>
         <h2>Log in.</h2>
         <p>Access your Aeris merchant dashboard to manage products, orders, payouts, and storefront updates.</p>
         <div className="field-stack">
