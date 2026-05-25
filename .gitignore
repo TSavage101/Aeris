@@ -1,0 +1,8 @@
+.next/
+node_modules/
+.env*
+!.env.example
+dist/
+coverage/
+.playwright-cli/
+output/
