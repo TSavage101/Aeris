@@ -41,6 +41,11 @@ type State = {
   payouts: PayoutRequest[];
   cart: CartLine[];
   activity: string[];
+  auth: {
+    email: string;
+    password: string;
+    loggedIn: boolean;
+  };
 };
 
 const defaultDraft: Draft = {
@@ -92,7 +97,12 @@ const initialState: State = {
   orders: [],
   payouts: [],
   cart: [],
-  activity: ["Draft storefront prepared from merchant details"]
+  activity: ["Draft storefront prepared from merchant details"],
+  auth: {
+    email: "",
+    password: "",
+    loggedIn: false
+  }
 };
 
 const RESERVED_SLUGS = new Set(["admin", "app", "www", "api", "aeris", "terra-basket-demo", "kora-market"]);
@@ -198,6 +208,8 @@ export function AerisProduct() {
   const [state, setState] = useState<State>(initialState);
   const [hydrated, setHydrated] = useState(false);
   const [toast, setToast] = useState("");
+  const merchantPaths = ["/dashboard", "/store", "/store/editor", "/products", "/products/new", "/orders", "/payouts", "/settings"];
+  const isMerchantPath = merchantPaths.includes(pathname) || (pathname.startsWith("/products/") && pathname !== "/products" && pathname !== "/products/new");
 
   useEffect(() => {
     const saved = localStorage.getItem("aeris-product-state");
@@ -212,6 +224,16 @@ export function AerisProduct() {
       localStorage.setItem("aeris-product-state", JSON.stringify(state));
     }
   }, [hydrated, state]);
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+
+    if (isMerchantPath && !state.auth.loggedIn) {
+      router.replace("/login");
+    }
+  }, [hydrated, isMerchantPath, pathname, router, state.auth.loggedIn]);
 
   function go(path: string) {
     router.push(path);
@@ -235,14 +257,15 @@ export function AerisProduct() {
       {pathname === "/onboarding/generating" && <Generating {...common} />}
       {pathname === "/onboarding/preview" && <Preview {...common} />}
       {pathname === "/claim" && <Claim {...common} />}
-      {["/dashboard", "/store"].includes(pathname) && <Dashboard {...common} section="store" />}
-      {pathname === "/store/editor" && <Dashboard {...common} section="editor" />}
-      {pathname === "/products" && <Dashboard {...common} section="products" />}
-      {pathname === "/products/new" && <ProductEditorPage {...common} mode="create" />}
-      {pathname.startsWith("/products/") && pathname !== "/products" && pathname !== "/products/new" && <ProductEditorPage {...common} mode="edit" />}
-      {pathname === "/orders" && <Dashboard {...common} section="orders" />}
-      {pathname === "/payouts" && <Dashboard {...common} section="payouts" />}
-      {pathname === "/settings" && <Dashboard {...common} section="settings" />}
+      {pathname === "/login" && <Login {...common} />}
+      {state.auth.loggedIn && ["/dashboard", "/store"].includes(pathname) && <Dashboard {...common} section="store" />}
+      {state.auth.loggedIn && pathname === "/store/editor" && <Dashboard {...common} section="editor" />}
+      {state.auth.loggedIn && pathname === "/products" && <Dashboard {...common} section="products" />}
+      {state.auth.loggedIn && pathname === "/products/new" && <ProductEditorPage {...common} mode="create" />}
+      {state.auth.loggedIn && pathname.startsWith("/products/") && pathname !== "/products" && pathname !== "/products/new" && <ProductEditorPage {...common} mode="edit" />}
+      {state.auth.loggedIn && pathname === "/orders" && <Dashboard {...common} section="orders" />}
+      {state.auth.loggedIn && pathname === "/payouts" && <Dashboard {...common} section="payouts" />}
+      {state.auth.loggedIn && pathname === "/settings" && <Dashboard {...common} section="settings" />}
       {pathname.startsWith("/s/") && <PublicStore {...common} />}
       {pathname === "/cart" && <CartPage {...common} />}
       {pathname === "/checkout" && <CheckoutPage {...common} />}
@@ -375,6 +398,9 @@ function Landing({ go }: CommonProps) {
             </button>
             <button className="btn-ghost" onClick={() => go("/s/terra-basket")}>
               View demo
+            </button>
+            <button className="btn-ghost" onClick={() => go("/login")}>
+              Merchant login
             </button>
           </div>
         </div>
@@ -749,8 +775,8 @@ function Preview({ state, update, go, notify }: CommonProps) {
 }
 
 function Claim({ state, update, go }: CommonProps) {
-  const [email, setEmail] = useState("merchant@aeris.store");
-  const [password, setPassword] = useState("password123");
+  const [email, setEmail] = useState(state.auth.email || "merchant@aeris.store");
+  const [password, setPassword] = useState(state.auth.password || "");
   const [slug, setSlug] = useState(state.store.slug);
   const available = isSlugAvailable(slug, state.store.slug);
 
@@ -776,10 +802,56 @@ function Claim({ state, update, go }: CommonProps) {
             Your store will live at: {slug || "your-slug"}.aeris.store · {available ? "✓ Available" : "✕ Already reserved or too short"}
           </span>
         </div>
-        <button className="btn-primary" disabled={!available} style={{ width: "100%", height: 56, marginTop: 24 }} onClick={() => {
-          update((current) => ({ ...current, store: { ...current.store, slug, ownerEmail: email, published: true }, activity: [`Published ${slug}.aeris.store`, ...current.activity] }));
+        <button className="btn-primary" disabled={!available || !password.trim()} style={{ width: "100%", height: 56, marginTop: 24 }} onClick={() => {
+          update((current) => ({
+            ...current,
+            store: { ...current.store, slug, ownerEmail: email, published: true },
+            auth: { email, password, loggedIn: true },
+            activity: [`Published ${slug}.aeris.store`, ...current.activity]
+          }));
           go("/store");
         }}>Create account & publish</button>
+        <button className="btn-ghost" style={{ width: "100%", marginTop: 12 }} onClick={() => go("/login")}>Already have an account? Log in →</button>
+      </div>
+    </main>
+  );
+}
+
+function Login({ state, update, go, notify }: CommonProps) {
+  const [email, setEmail] = useState(state.auth.email || state.store.ownerEmail || "");
+  const [password, setPassword] = useState("");
+
+  function login() {
+    if (!email.trim() || !password.trim()) {
+      notify("Enter your email and password");
+      return;
+    }
+
+    if (email.trim() !== state.auth.email || password !== state.auth.password) {
+      notify("Incorrect email or password");
+      return;
+    }
+
+    update((current) => {
+      const nextState = { ...current, auth: { ...current.auth, loggedIn: true } };
+      persistState(nextState);
+      return nextState;
+    });
+    go("/store");
+  }
+
+  return (
+    <main className="wizard-shell" style={{ display: "grid", placeItems: "center" }}>
+      <div className="form-card corner-marked" style={{ width: "min(480px, calc(100% - 32px))" }}>
+        <Corners />
+        <h2>Log in.</h2>
+        <p>Access your Aeris merchant dashboard to manage products, orders, payouts, and storefront updates.</p>
+        <div className="field-stack">
+          <Field id="login-email" label="Email address" value={email} onChange={setEmail} />
+          <Field id="login-password" label="Password" value={password} onChange={setPassword} />
+        </div>
+        <button className="btn-primary" style={{ width: "100%", height: 56, marginTop: 24 }} onClick={login}>Log in →</button>
+        <button className="btn-ghost" style={{ width: "100%", marginTop: 12 }} onClick={() => go("/claim")}>Create an account →</button>
       </div>
     </main>
   );
@@ -819,6 +891,22 @@ function Dashboard({ state, update, go, notify, section }: CommonProps & { secti
             <span className="label">Merchant balance</span>
             <span className="stat-number" style={{ fontSize: 32 }}>{money(balance)}</span>
             <button className="btn-primary" style={{ width: "100%" }} onClick={() => go("/payouts")}>Request payout →</button>
+          </div>
+          <div className="side-box" style={{ marginTop: 16 }}>
+            <span className="label">Session</span>
+            <p className="mono" style={{ fontSize: 11, color: "var(--color-forest)" }}>{state.auth.email || state.store.ownerEmail || "Merchant session"}</p>
+            <button
+              className="btn-ghost"
+              style={{ width: "100%" }}
+              onClick={() => {
+                const nextState = { ...state, auth: { ...state.auth, loggedIn: false } };
+                persistState(nextState);
+                update(() => nextState);
+                go("/login");
+              }}
+            >
+              Logout
+            </button>
           </div>
         </aside>
       </div>
@@ -1285,6 +1373,19 @@ function SettingsManager({ state, update }: { state: State; update: CommonProps[
         </div>
         <p className="mono" style={{ color: "var(--color-gold)", fontSize: 10 }}>⚠ Slug is locked after publish and cannot be changed.</p>
         <button className="btn-primary" disabled={locked} onClick={saveSettings}>Save changes</button>
+        <button
+          className="btn-ghost"
+          onClick={() => {
+            update((current) => {
+              const nextState = { ...current, auth: { ...current.auth, loggedIn: false } };
+              persistState(nextState);
+              return nextState;
+            });
+            window.location.href = "/login";
+          }}
+        >
+          Logout
+        </button>
       </div>
     </>
   );
