@@ -143,6 +143,55 @@ function persistState(nextState: State) {
   localStorage.setItem("aeris-product-state", JSON.stringify(nextState));
 }
 
+function ChainBrainIcon() {
+  return (
+    <svg aria-hidden="true" className="chain-svg" viewBox="0 0 20 20" fill="none">
+      <path d="M7.5 4.5C5.29 4.5 3.5 6.29 3.5 8.5C3.5 9.77 4.09 10.91 5 11.64V13.5C5 14.6 5.9 15.5 7 15.5H8M12.5 4.5C14.71 4.5 16.5 6.29 16.5 8.5C16.5 9.77 15.91 10.91 15 11.64V13.5C15 14.6 14.1 15.5 13 15.5H12M8 15.5H12M10 3V17" stroke="currentColor" strokeWidth="1.2" strokeLinecap="square" />
+    </svg>
+  );
+}
+
+function ChainChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg aria-hidden="true" className={`chain-svg chain-chevron ${open ? "open" : ""}`} viewBox="0 0 20 20" fill="none">
+      <path d="M5 8L10 13L15 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="square" />
+    </svg>
+  );
+}
+
+function StepIcon({ status }: { status: ThoughtStepStatus }) {
+  if (status === "completed") {
+    return (
+      <svg aria-hidden="true" className="chain-svg" viewBox="0 0 20 20" fill="none">
+        <path d="M4 10L8 14L16 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="square" />
+      </svg>
+    );
+  }
+
+  if (status === "active") {
+    return (
+      <svg aria-hidden="true" className="chain-svg" viewBox="0 0 20 20" fill="none">
+        <path d="M10 3V10L14.5 12.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="square" />
+        <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.2" />
+      </svg>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <svg aria-hidden="true" className="chain-svg" viewBox="0 0 20 20" fill="none">
+        <path d="M6 6L14 14M14 6L6 14" stroke="currentColor" strokeWidth="1.2" strokeLinecap="square" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" className="chain-svg" viewBox="0 0 20 20" fill="none">
+      <rect x="5" y="5" width="10" height="10" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
 export function AerisProduct() {
   const pathname = usePathname();
   const router = useRouter();
@@ -844,6 +893,7 @@ function StoreEditorPage({ state, update, go, notify }: CommonProps) {
   const [previewStore, setPreviewStore] = useState<Store>(state.store);
   const [isRunning, setIsRunning] = useState(false);
   const [isReady, setIsReady] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(true);
   const [stepStatuses, setStepStatuses] = useState<ThoughtStepStatus[]>(["pending", "pending", "pending", "pending"]);
 
   useEffect(() => {
@@ -855,6 +905,7 @@ function StoreEditorPage({ state, update, go, notify }: CommonProps) {
     setPreviewStore(nextPreview);
     setIsRunning(true);
     setIsReady(false);
+    setTraceOpen(true);
     setStepStatuses(["active", "pending", "pending", "pending"]);
 
     window.setTimeout(() => setStepStatuses(["completed", "active", "pending", "pending"]), 900);
@@ -913,7 +964,7 @@ function StoreEditorPage({ state, update, go, notify }: CommonProps) {
           <button className="btn-primary" disabled={isRunning || !prompt.trim()} onClick={runAiDraft}>Generate draft changes</button>
           <button className="btn-ghost" onClick={() => go("/settings")}>Edit brand assets</button>
         </div>
-        <ChainOfThoughtCard statuses={stepStatuses} running={isRunning} ready={isReady} />
+        {(isRunning || isReady) && <ChainOfThoughtCard statuses={stepStatuses} running={isRunning} ready={isReady} open={traceOpen} onToggle={() => setTraceOpen((current) => !current)} />}
         {isReady && (
           <div className="form-card" style={{ marginTop: 24, padding: 24 }}>
             <span className="label">Proposed changes</span>
@@ -923,6 +974,7 @@ function StoreEditorPage({ state, update, go, notify }: CommonProps) {
               <button className="btn-ghost" onClick={() => {
                 setPreviewStore(state.store);
                 setIsReady(false);
+                setTraceOpen(true);
                 setStepStatuses(["pending", "pending", "pending", "pending"]);
               }}>Discard</button>
             </div>
@@ -937,7 +989,7 @@ function StoreEditorPage({ state, update, go, notify }: CommonProps) {
   );
 }
 
-function ChainOfThoughtCard({ statuses, running, ready }: { statuses: ThoughtStepStatus[]; running: boolean; ready: boolean }) {
+function ChainOfThoughtCard({ statuses, running, ready, open, onToggle }: { statuses: ThoughtStepStatus[]; running: boolean; ready: boolean; open: boolean; onToggle: () => void }) {
   const steps = [
     "Reading your storefront prompt",
     "Rewriting hero voice and positioning",
@@ -945,29 +997,39 @@ function ChainOfThoughtCard({ statuses, running, ready }: { statuses: ThoughtSte
     "Preparing preview-ready draft"
   ];
 
+  const summaries = [
+    "Understanding the merchant request and locking onto the right store context.",
+    "Reworking headline language, hierarchy, and brand positioning for the storefront.",
+    "Applying the copy direction to the hero and storefront presentation choices.",
+    "Preparing a preview-safe draft the merchant can inspect before applying."
+  ];
+
   return (
     <div className="chain-card">
-      <button className={`chain-trigger ${running ? "active" : ""}`} type="button">
-        <span className="chain-trigger-dot" />
-        <span>{ready ? "Draft plan prepared" : running ? "Chain of Thought is running" : "Chain of Thought"}</span>
+      <button className={`chain-trigger ${running ? "active" : ""}`} type="button" onClick={onToggle}>
+        <span className="chain-trigger-leading">
+          <ChainBrainIcon />
+          <span>{running ? "AI is updating your storefront draft" : "AI draft reasoning complete"}</span>
+        </span>
+        <ChainChevronIcon open={open} />
       </button>
-      <div className="chain-content">
+      {open && <div className="chain-content">
         {steps.map((label, index) => (
           <div className="chain-step" data-status={statuses[index]} key={label}>
             <div className="chain-step-title">
-              <span className="chain-step-icon" />
+              <span className="chain-step-icon"><StepIcon status={statuses[index]} /></span>
               <span>{label}</span>
             </div>
             <div className="chain-step-copy">
-              {statuses[index] === "completed" && "Completed"}
-              {statuses[index] === "active" && "Working through this step now"}
-              {statuses[index] === "pending" && "Waiting"}
-              {statuses[index] === "error" && "Needs attention"}
+              {statuses[index] === "completed" && summaries[index]}
+              {statuses[index] === "active" && summaries[index]}
+              {statuses[index] === "pending" && "Queued and waiting for the previous AI step to complete."}
+              {statuses[index] === "error" && "This step needs attention before the draft can continue."}
             </div>
           </div>
         ))}
         {ready && <div className="chain-complete">All draft steps complete</div>}
-      </div>
+      </div>}
     </div>
   );
 }
