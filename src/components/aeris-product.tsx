@@ -882,10 +882,14 @@ function CartPage({ state, go }: CommonProps) {
   const products = state.cart.map((line) => ({ line, product: state.store.products.find((product) => product.id === line.productId) })).filter((entry) => entry.product);
   const totals = calculateCheckout(state.store.products, state.cart, state.store.city);
   return (
-    <main className="container section-block">
-      <h2>Your cart</h2>
-      {products.length === 0 ? <div className="empty-state"><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>Continue shopping →</button></div> : <div className="two-column"><div className="table">{products.map(({ line, product }) => <div className="table-row" key={line.productId}><strong>{product?.name}</strong><span>{money(product?.price || 0)}</span><span>Qty {line.quantity}</span><span>{money((product?.price || 0) * line.quantity)}</span><span /></div>)}</div><div className="form-card corner-marked"><Corners /><span className="label">Order summary</span><p>Subtotal: {money(totals.subtotal)}</p><p>Logistics: {money(totals.logisticsFee)}</p><h3>Total: {money(totals.total)}</h3><button className="btn-primary" onClick={() => go("/checkout")}>Proceed to checkout →</button></div></div>}
+    <>
+      <StoreUtilityNav store={state.store} cartCount={state.cart.reduce((sum, line) => sum + line.quantity, 0)} go={go} />
+      <main className="container section-block page-with-store-nav">
+        <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>← Continue shopping</button>
+        <h2 style={{ marginTop: 32 }}>Your cart</h2>
+        {products.length === 0 ? <div className="empty-state"><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>Continue shopping →</button></div> : <div className="two-column"><div className="table">{products.map(({ line, product }) => <div className="table-row" key={line.productId}><strong>{product?.name}</strong><span>{money(product?.price || 0)}</span><span>Qty {line.quantity}</span><span>{money((product?.price || 0) * line.quantity)}</span><span /></div>)}</div><div className="form-card corner-marked"><Corners /><span className="label">Order summary</span><p>Subtotal: {money(totals.subtotal)}</p><p>Logistics: {money(totals.logisticsFee)}</p><h3>Total: {money(totals.total)}</h3><button className="btn-primary" onClick={() => go("/checkout")}>Proceed to checkout →</button></div></div>}
     </main>
+    </>
   );
 }
 
@@ -893,8 +897,10 @@ function CheckoutPage({ state, update, go, notify }: CommonProps) {
   const [details, setDetails] = useState<CheckoutDetails>({ fullName: "Ada Okonkwo", phone: "08012345678", address: "14 Admiralty Way", landmark: "Near pharmacy", city: state.store.city });
   const totals = calculateCheckout(state.store.products, state.cart, details.city);
   return (
-    <main className="container section-block two-column">
-      <div className="form-card corner-marked"><Corners /><h2>Checkout</h2><Field id="full-name" label="Full name" value={details.fullName} onChange={(fullName) => setDetails({ ...details, fullName })} /><Field id="phone" label="Phone number" value={details.phone} onChange={(phone) => setDetails({ ...details, phone })} /><Select id="delivery-city" label="Delivery city" value={details.city} onChange={(city) => setDetails({ ...details, city: city as SupportedCity })} options={[...SUPPORTED_CITIES]} /><Field id="address" label="Address line" value={details.address} onChange={(address) => setDetails({ ...details, address })} /><button className="btn-primary" style={{ width: "100%", height: 56, marginTop: 16 }} onClick={() => {
+    <>
+      <StoreUtilityNav store={state.store} cartCount={state.cart.reduce((sum, line) => sum + line.quantity, 0)} go={go} />
+      <main className="container section-block two-column page-with-store-nav">
+        <div className="form-card corner-marked"><Corners /><button className="btn-ghost" onClick={() => go("/cart")}>← Back to cart</button><h2 style={{ marginTop: 24 }}>Checkout</h2><Field id="full-name" label="Full name" value={details.fullName} onChange={(fullName) => setDetails({ ...details, fullName })} /><Field id="phone" label="Phone number" value={details.phone} onChange={(phone) => setDetails({ ...details, phone })} /><Select id="delivery-city" label="Delivery city" value={details.city} onChange={(city) => setDetails({ ...details, city: city as SupportedCity })} options={[...SUPPORTED_CITIES]} /><Field id="address" label="Address line" value={details.address} onChange={(address) => setDetails({ ...details, address })} /><button className="btn-primary" style={{ width: "100%", height: 56, marginTop: 16 }} onClick={() => {
         if (!isSupportedCity(details.city)) return;
         const items = state.cart.map((line) => {
           const product = state.store.products.find((candidate) => candidate.id === line.productId)!;
@@ -907,12 +913,34 @@ function CheckoutPage({ state, update, go, notify }: CommonProps) {
       }}>Proceed to payment →</button></div>
       <aside className="form-card"><span className="label">Order summary</span><p>Subtotal: {money(totals.subtotal)}</p><p>Delivery: {money(totals.logisticsFee)}</p><h3>Total: {money(totals.total)}</h3></aside>
     </main>
+    </>
   );
 }
 
-function OrderStatus({ state }: CommonProps) {
+function OrderStatus({ state, go }: CommonProps) {
   const pathname = usePathname();
   const ref = pathname.split("/").pop();
   const order = state.orders.find((candidate) => candidate.reference === ref);
-  return <main className="container section-block">{order ? <><StatusBadge>Payment confirmed</StatusBadge><h2>Order status</h2><p className="mono">#{order.reference}</p><div className="form-card"><h3>{order.status.toUpperCase()}</h3><p>Delivery to {order.delivery.fullName}, {order.delivery.address}, {order.delivery.city}.</p></div></> : <div className="empty-state">Order not found.</div>}</main>;
+  return (
+    <>
+      <StoreUtilityNav store={state.store} cartCount={state.cart.reduce((sum, line) => sum + line.quantity, 0)} go={go} />
+      <main className="container section-block page-with-store-nav">
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 32 }}>
+          <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>← Back to store</button>
+          <button className="btn-ghost" onClick={() => go("/store")}>Merchant dashboard →</button>
+        </div>
+        {order ? <><StatusBadge>Payment confirmed</StatusBadge><h2>Order status</h2><p className="mono">#{order.reference}</p><div className="form-card"><h3>{order.status.toUpperCase()}</h3><p>Delivery to {order.delivery.fullName}, {order.delivery.address}, {order.delivery.city}.</p></div></> : <div className="empty-state">Order not found.</div>}
+      </main>
+    </>
+  );
+}
+
+function StoreUtilityNav({ store, cartCount, go }: { store: Store; cartCount: number; go: (path: string) => void }) {
+  return (
+    <nav className="store-nav utility-nav">
+      <button className="nav-link" onClick={() => go(`/s/${store.slug}`)}>← Storefront</button>
+      <strong style={{ fontFamily: "var(--font-display)", color: "var(--color-forest)" }}>{store.name}</strong>
+      <button className="btn-ghost" onClick={() => go("/cart")}>Cart <span className="cart-pill">{cartCount}</span></button>
+    </nav>
+  );
 }

@@ -884,6 +884,16 @@ textarea.field-input {
   padding: 0 var(--space-6);
 }
 
+.utility-nav {
+  position: fixed;
+  right: 0;
+  left: 0;
+}
+
+.page-with-store-nav {
+  padding-top: calc(var(--space-20) + 48px);
+}
+
 .store-hero {
   display: grid;
   min-height: 80vh;
