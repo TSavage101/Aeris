@@ -439,7 +439,7 @@ textarea.field-input {
   inset: 0;
   z-index: 1090;
   border: 0;
-  background: rgba(26, 60, 43, 0.15);
+  background: rgba(26, 60, 43, 0.38);
   backdrop-filter: blur(4px);
 }
 
@@ -453,15 +453,27 @@ textarea.field-input {
   width: 280px;
   align-content: start;
   gap: var(--space-4);
-  border-right: var(--border-hair);
-  background: var(--color-paper);
+  border-right: 1px solid var(--color-forest);
+  background: rgba(247, 247, 245, 0.99);
   padding: var(--space-6);
   animation: drawer-in 200ms var(--ease-snap);
 }
 
 .mobile-drawer .nav-link {
+  display: flex;
+  align-items: center;
   min-height: 48px;
+  border: var(--border-hair);
+  background: var(--color-white);
+  color: var(--color-forest);
+  padding: 0 var(--space-4);
   text-align: left;
+}
+
+.mobile-drawer .nav-link.active::after {
+  right: 16px;
+  left: 16px;
+  bottom: 8px;
 }
 
 .landing-hero {
@@ -935,6 +947,10 @@ textarea.field-input {
   padding-top: calc(var(--space-20) + 48px);
 }
 
+.page-with-nav-gap {
+  padding-top: 0;
+}
+
 .store-hero {
   display: grid;
   min-height: 80vh;
@@ -1002,6 +1018,137 @@ textarea.field-input {
   font-size: var(--text-10);
   letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+
+.asset-upload {
+  display: grid;
+  gap: var(--space-2);
+  border: var(--border-hair);
+  background: var(--color-white);
+  padding: var(--space-4);
+}
+
+.asset-upload-copy {
+  color: var(--color-forest);
+  font-family: var(--font-mono);
+  font-size: var(--text-11);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.asset-upload-hint {
+  color: rgba(58, 58, 56, 0.72);
+  font-size: var(--text-14);
+  line-height: 1.5;
+}
+
+.asset-upload-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.editor-note {
+  font-size: var(--text-14);
+}
+
+.editor-preview-panel {
+  background: var(--color-paper);
+}
+
+.chain-card {
+  margin-top: 24px;
+  border: var(--border-hair);
+  background: var(--color-white);
+  padding: 24px;
+}
+
+.chain-trigger {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-3);
+  border: 0;
+  background: transparent;
+  color: rgba(58, 58, 56, 0.72);
+  padding: 0;
+  text-align: left;
+}
+
+.chain-trigger.active span:last-child {
+  animation: chain-shimmer 1.2s linear infinite;
+}
+
+.chain-trigger-dot,
+.chain-step-icon {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--color-forest);
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.chain-content {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: 20px;
+}
+
+.chain-step {
+  border-left: 1px solid var(--color-grid-20);
+  padding: 0 0 0 16px;
+}
+
+.chain-step-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-forest);
+  font-family: var(--font-mono);
+  font-size: var(--text-11);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chain-step-copy,
+.chain-complete {
+  margin-top: 8px;
+  color: rgba(58, 58, 56, 0.76);
+  font-family: var(--font-body);
+  font-size: var(--text-14);
+  line-height: 1.5;
+}
+
+.chain-step[data-status="active"] .chain-step-icon {
+  background: var(--color-gold);
+  border-color: var(--color-gold);
+}
+
+.chain-step[data-status="completed"] .chain-step-icon,
+.chain-complete::before {
+  background: var(--color-mint);
+  border-color: var(--color-forest);
+}
+
+.chain-complete {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-forest);
+  font-family: var(--font-mono);
+  font-size: var(--text-11);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chain-complete::before {
+  width: 10px;
+  height: 10px;
+  content: "";
+  flex-shrink: 0;
+  border: 1px solid var(--color-forest);
 }
 
 .qty-controls {
@@ -1113,6 +1260,18 @@ textarea.field-input {
   }
 }
 
+@keyframes chain-shimmer {
+  0% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.55;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1137,6 +1296,10 @@ textarea.field-input {
     border-left: 0;
     border-right: 0;
     border-bottom: var(--border-hair);
+  }
+
+  .preview-sidebar {
+    padding-bottom: var(--space-8);
   }
 
   .bottom-bar {

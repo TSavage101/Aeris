@@ -122,6 +122,15 @@ function hexToRgb(hex: string) {
   };
 }
 
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 function rgbToHex(r: number, g: number, b: number) {
   return `#${[r, g, b].map((value) => Math.max(0, Math.min(255, value)).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
 }
@@ -178,6 +187,7 @@ export function AerisProduct() {
       {pathname === "/onboarding/preview" && <Preview {...common} />}
       {pathname === "/claim" && <Claim {...common} />}
       {["/dashboard", "/store"].includes(pathname) && <Dashboard {...common} section="store" />}
+      {pathname === "/store/editor" && <Dashboard {...common} section="editor" />}
       {pathname === "/products" && <Dashboard {...common} section="products" />}
       {pathname === "/orders" && <Dashboard {...common} section="orders" />}
       {pathname === "/payouts" && <Dashboard {...common} section="payouts" />}
@@ -724,9 +734,19 @@ function Claim({ state, update, go }: CommonProps) {
   );
 }
 
-function Dashboard({ state, update, go, notify, section }: CommonProps & { section: "store" | "products" | "orders" | "payouts" | "settings" }) {
+function Dashboard({ state, update, go, notify, section }: CommonProps & { section: "store" | "editor" | "products" | "orders" | "payouts" | "settings" }) {
   const visibleProducts = state.store.products.filter((product) => !product.deleted);
   const balance = availableBalance(state.orders, state.payouts);
+
+  if (section === "editor") {
+    return (
+      <>
+        <BrandNav state={state} update={update} go={go} />
+        <StoreEditorPage state={state} update={update} go={go} notify={notify} />
+      </>
+    );
+  }
+
   return (
     <>
       <BrandNav state={state} update={update} go={go} />
@@ -756,8 +776,6 @@ function Dashboard({ state, update, go, notify, section }: CommonProps & { secti
 }
 
 function StoreOverview({ state, go, balance }: { state: State; go: (path: string) => void; balance: number }) {
-  const [livePrompt, setLivePrompt] = useState("Refresh the hero copy and make the storefront feel more premium.");
-
   return (
     <>
       <div className="stats-grid">
@@ -766,39 +784,23 @@ function StoreOverview({ state, go, balance }: { state: State; go: (path: string
         <div className="stat-card accent-coral"><span className="label">Available</span><span className="stat-number">{money(balance)}</span></div>
       </div>
       <h2>Store overview</h2>
-      <p>Your storefront is published at <strong>{state.store.slug}.aeris.store</strong>. Manage products, orders, payouts, and settings from the navigation above.</p>
+      <p>Your storefront {state.store.published ? <>is published at <strong>{state.store.slug}.aeris.store</strong></> : "is currently in draft mode"}. Manage products, orders, payouts, and settings from the navigation above.</p>
       <div className="row"><button className="btn-primary" onClick={() => go("/products")}>Add product +</button><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>View storefront ↗</button></div>
       <div className="two-column" style={{ marginTop: 32 }}>
         <div className="form-card corner-marked">
           <Corners />
-          <span className="label">Live store AI editor</span>
-          <h3>Prompt AI to change the live storefront</h3>
-          <p>Use this after publishing to rewrite copy, improve merchandising, or generate a better hero direction for the live store.</p>
-          <Area id="live-ai" label="Prompt" rows={5} value={livePrompt} onChange={setLivePrompt} />
-          <button
-            className="btn-primary"
-            onClick={() => {
-              const generatedImage = livePrompt.toLowerCase().includes("background") || livePrompt.toLowerCase().includes("hero")
-                ? `https://images.aeris.store/generated/${slugify(state.store.name)}-hero.jpg`
-                : state.store.heroImageUrl || "";
-              localStorage.setItem(
-                "aeris-product-state",
-                JSON.stringify({
-                  ...state,
-                  store: {
-                    ...state.store,
-                    heroTitle: `${state.store.name.toUpperCase()} REIMAGINED.`,
-                    heroCopy: `AI update: ${livePrompt}`,
-                    heroImageUrl: generatedImage
-                  },
-                  activity: [`AI updated live store: ${livePrompt}`, ...state.activity]
-                })
-              );
-              window.location.href = "/store";
-            }}
-          >
-            Apply to live store
-          </button>
+          <span className="label">Store editor</span>
+          <h3>AI draft workspace with live preview</h3>
+          <p>Open the dedicated editor to draft changes, inspect the storefront preview, and only apply them when the store is ready to go live again.</p>
+          {state.store.published ? (
+            <>
+              <span className="chip coral">Unpublish required before editing</span>
+              <p className="editor-note">Editing is restricted to draft mode so shoppers never see partial changes while browsing your store.</p>
+              <button className="btn-danger" onClick={() => go("/settings")}>Go to settings</button>
+            </>
+          ) : (
+            <button className="btn-primary" onClick={() => go("/store/editor")}>Open AI editor →</button>
+          )}
         </div>
         <div className="form-card corner-marked">
           <Corners />
@@ -816,6 +818,157 @@ function StoreOverview({ state, go, balance }: { state: State; go: (path: string
         </div>
       </div>
     </>
+  );
+}
+
+type ThoughtStepStatus = "pending" | "active" | "completed" | "error";
+
+function buildAiPreviewStore(store: Store, prompt: string): Store {
+  const lowerPrompt = prompt.toLowerCase();
+  const wantsHeroArt = lowerPrompt.includes("hero") || lowerPrompt.includes("background") || lowerPrompt.includes("image");
+  const wantsPremium = lowerPrompt.includes("premium") || lowerPrompt.includes("luxury") || lowerPrompt.includes("elevated");
+  const wantsFresh = lowerPrompt.includes("fresh") || lowerPrompt.includes("clean");
+
+  return {
+    ...store,
+    heroTitle: wantsPremium ? `${store.name.toUpperCase()} CURATED FOR MODERN HOMES.` : `${store.name.toUpperCase()} REIMAGINED FOR ${store.city.toUpperCase()}.`,
+    heroCopy: wantsFresh
+      ? "Cleaner copy, sharper hierarchy, and a calmer storefront rhythm for returning shoppers."
+      : `AI draft update: ${prompt}`,
+    heroImageUrl: wantsHeroArt ? `https://images.aeris.store/generated/${slugify(store.name)}-${Date.now().toString(36)}.jpg` : store.heroImageUrl
+  };
+}
+
+function StoreEditorPage({ state, update, go, notify }: CommonProps) {
+  const [prompt, setPrompt] = useState("Refresh the hero copy and make the storefront feel more premium.");
+  const [previewStore, setPreviewStore] = useState<Store>(state.store);
+  const [isRunning, setIsRunning] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [stepStatuses, setStepStatuses] = useState<ThoughtStepStatus[]>(["pending", "pending", "pending", "pending"]);
+
+  useEffect(() => {
+    setPreviewStore(state.store);
+  }, [state.store]);
+
+  function runAiDraft() {
+    const nextPreview = buildAiPreviewStore(state.store, prompt);
+    setPreviewStore(nextPreview);
+    setIsRunning(true);
+    setIsReady(false);
+    setStepStatuses(["active", "pending", "pending", "pending"]);
+
+    window.setTimeout(() => setStepStatuses(["completed", "active", "pending", "pending"]), 900);
+    window.setTimeout(() => setStepStatuses(["completed", "completed", "active", "pending"]), 1800);
+    window.setTimeout(() => setStepStatuses(["completed", "completed", "completed", "active"]), 2700);
+    window.setTimeout(() => {
+      setStepStatuses(["completed", "completed", "completed", "completed"]);
+      setIsRunning(false);
+      setIsReady(true);
+    }, 3600);
+  }
+
+  function applyPreview() {
+    update((current) => {
+      const nextState = {
+        ...current,
+        draft: {
+          ...current.draft,
+          tagline: previewStore.heroCopy,
+          logoUrl: previewStore.logoUrl || "",
+          heroImageUrl: previewStore.heroImageUrl || ""
+        },
+        store: previewStore,
+        activity: [`AI drafted storefront changes: ${prompt}`, ...current.activity]
+      };
+      persistState(nextState);
+      return nextState;
+    });
+    notify("Draft storefront changes applied");
+    go("/store");
+  }
+
+  if (state.store.published) {
+    return (
+      <div className="form-card corner-marked" style={{ maxWidth: 760 }}>
+        <Corners />
+        <span className="label">Store editor locked</span>
+        <h2>Unpublish before making storefront changes.</h2>
+        <p>This editor only runs in draft mode so customers never see half-finished AI updates. Unpublish, refine the store here, preview the result, then publish again.</p>
+        <div className="row">
+          <button className="btn-ghost" onClick={() => go("/store")}>← Back to overview</button>
+          <button className="btn-danger" onClick={() => go("/settings")}>Go to settings</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="editor-shell page-with-nav-gap">
+      <aside className="preview-sidebar">
+        <span className="label">Live store AI editor</span>
+        <h2 style={{ marginTop: 12 }}>Draft changes before you republish.</h2>
+        <p>Prompt the AI, watch the Chain of Thought run, then review the storefront preview before applying anything.</p>
+        <Area id="editor-prompt" label="Prompt" rows={6} value={prompt} onChange={setPrompt} />
+        <div className="row" style={{ marginTop: 16, flexWrap: "wrap" }}>
+          <button className="btn-primary" disabled={isRunning || !prompt.trim()} onClick={runAiDraft}>Generate draft changes</button>
+          <button className="btn-ghost" onClick={() => go("/settings")}>Edit brand assets</button>
+        </div>
+        <ChainOfThoughtCard statuses={stepStatuses} running={isRunning} ready={isReady} />
+        {isReady && (
+          <div className="form-card" style={{ marginTop: 24, padding: 24 }}>
+            <span className="label">Proposed changes</span>
+            <p className="editor-note">Hero messaging is tightened, storefront voice is more premium, and hero art is refreshed when your prompt asks for it.</p>
+            <div className="row" style={{ flexWrap: "wrap" }}>
+              <button className="btn-primary" onClick={applyPreview}>Apply draft to store</button>
+              <button className="btn-ghost" onClick={() => {
+                setPreviewStore(state.store);
+                setIsReady(false);
+                setStepStatuses(["pending", "pending", "pending", "pending"]);
+              }}>Discard</button>
+            </div>
+          </div>
+        )}
+      </aside>
+      <div className="preview-main editor-preview-panel">
+        <div className="preview-badge status-badge"><span className="status-dot" /><span>Draft preview</span></div>
+        <StorefrontRenderer store={previewStore} products={previewStore.products.filter((product) => !product.deleted)} cart={state.cart} addToCart={() => {}} preview />
+      </div>
+    </div>
+  );
+}
+
+function ChainOfThoughtCard({ statuses, running, ready }: { statuses: ThoughtStepStatus[]; running: boolean; ready: boolean }) {
+  const steps = [
+    "Reading your storefront prompt",
+    "Rewriting hero voice and positioning",
+    "Adjusting storefront presentation",
+    "Preparing preview-ready draft"
+  ];
+
+  return (
+    <div className="chain-card">
+      <button className={`chain-trigger ${running ? "active" : ""}`} type="button">
+        <span className="chain-trigger-dot" />
+        <span>{ready ? "Draft plan prepared" : running ? "Chain of Thought is running" : "Chain of Thought"}</span>
+      </button>
+      <div className="chain-content">
+        {steps.map((label, index) => (
+          <div className="chain-step" data-status={statuses[index]} key={label}>
+            <div className="chain-step-title">
+              <span className="chain-step-icon" />
+              <span>{label}</span>
+            </div>
+            <div className="chain-step-copy">
+              {statuses[index] === "completed" && "Completed"}
+              {statuses[index] === "active" && "Working through this step now"}
+              {statuses[index] === "pending" && "Waiting"}
+              {statuses[index] === "error" && "Needs attention"}
+            </div>
+          </div>
+        ))}
+        {ready && <div className="chain-complete">All draft steps complete</div>}
+      </div>
+    </div>
   );
 }
 
@@ -882,14 +1035,39 @@ function PayoutsManager({ state, update, balance }: { state: State; update: Comm
 }
 
 function SettingsManager({ state, update }: { state: State; update: CommonProps["update"] }) {
+  async function uploadAsset(kind: "logo" | "hero", file?: File | null) {
+    if (!file) {
+      return;
+    }
+
+    const dataUrl = await fileToDataUrl(file);
+    update((current) => {
+      const nextState = {
+        ...current,
+        draft: {
+          ...current.draft,
+          logoUrl: kind === "logo" ? dataUrl : current.draft.logoUrl,
+          heroImageUrl: kind === "hero" ? dataUrl : current.draft.heroImageUrl
+        },
+        store: {
+          ...current.store,
+          logoUrl: kind === "logo" ? dataUrl : current.store.logoUrl,
+          heroImageUrl: kind === "hero" ? dataUrl : current.store.heroImageUrl
+        }
+      };
+      persistState(nextState);
+      return nextState;
+    });
+  }
+
   return (
     <>
       <h2>Settings</h2>
       <div className="field-stack" style={{ maxWidth: 720 }}>
         <Field id="settings-name" label="Store name" value={state.store.name} onChange={(name) => update((current) => ({ ...current, store: { ...current.store, name } }))} />
         <Field id="settings-tagline" label="Tagline" value={state.store.heroCopy} onChange={(heroCopy) => update((current) => ({ ...current, store: { ...current.store, heroCopy } }))} />
-        <Field id="settings-logo" label="Logo URL" value={state.store.logoUrl || ""} onChange={(logoUrl) => update((current) => ({ ...current, draft: { ...current.draft, logoUrl }, store: { ...current.store, logoUrl } }))} />
-        <Field id="settings-hero-image" label="Hero background image URL" value={state.store.heroImageUrl || ""} onChange={(heroImageUrl) => update((current) => ({ ...current, draft: { ...current.draft, heroImageUrl }, store: { ...current.store, heroImageUrl } }))} />
+        <AssetUploadField id="settings-logo" label="Store logo upload" hint="Upload the logo shown in your storefront navigation." onFileSelect={(file) => void uploadAsset("logo", file)} />
+        <AssetUploadField id="settings-hero-image" label="Hero background image upload" hint="Upload the background art used behind the storefront hero." onFileSelect={(file) => void uploadAsset("hero", file)} />
         <div className="row" style={{ alignItems: "flex-start" }}>
           {state.store.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${state.store.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
           {state.store.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${state.store.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
@@ -897,6 +1075,19 @@ function SettingsManager({ state, update }: { state: State; update: CommonProps[
         <p className="mono" style={{ color: "var(--color-gold)", fontSize: 10 }}>⚠ Slug is locked after publish and cannot be changed.</p>
       </div>
     </>
+  );
+}
+
+function AssetUploadField({ id, label, hint, onFileSelect }: { id: string; label: string; hint: string; onFileSelect: (file?: File | null) => void }) {
+  return (
+    <div className="field">
+      <label className="field-label" htmlFor={id}>{label}</label>
+      <label className="asset-upload" htmlFor={id}>
+        <span className="asset-upload-copy">Choose image</span>
+        <span className="asset-upload-hint">{hint}</span>
+      </label>
+      <input id={id} className="asset-upload-input" type="file" accept="image/*" onChange={(event) => onFileSelect(event.target.files?.[0])} />
+    </div>
   );
 }
 
