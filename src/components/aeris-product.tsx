@@ -238,6 +238,8 @@ export function AerisProduct() {
       {["/dashboard", "/store"].includes(pathname) && <Dashboard {...common} section="store" />}
       {pathname === "/store/editor" && <Dashboard {...common} section="editor" />}
       {pathname === "/products" && <Dashboard {...common} section="products" />}
+      {pathname === "/products/new" && <ProductEditorPage {...common} mode="create" />}
+      {pathname.startsWith("/products/") && pathname !== "/products" && pathname !== "/products/new" && <ProductEditorPage {...common} mode="edit" />}
       {pathname === "/orders" && <Dashboard {...common} section="orders" />}
       {pathname === "/payouts" && <Dashboard {...common} section="payouts" />}
       {pathname === "/settings" && <Dashboard {...common} section="settings" />}
@@ -614,11 +616,11 @@ function Onboarding({ state, update, go }: CommonProps) {
   );
 }
 
-function Field({ id, label, value, onChange, readOnly }: { id: string; label: string; value: string; onChange: (value: string) => void; readOnly?: boolean }) {
+function Field({ id, label, value, onChange, readOnly, disabled }: { id: string; label: string; value: string; onChange: (value: string) => void; readOnly?: boolean; disabled?: boolean }) {
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>{label}</label>
-      <input id={id} className="field-input" value={value} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} />
+      <input id={id} className="field-input" disabled={disabled} value={value} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }
@@ -802,7 +804,7 @@ function Dashboard({ state, update, go, notify, section }: CommonProps & { secti
       <div className="dashboard-layout">
         <main className="dashboard-main">
           {section === "store" && <StoreOverview state={state} go={go} balance={balance} />}
-          {section === "products" && <ProductsManager state={state} update={update} notify={notify} products={visibleProducts} />}
+          {section === "products" && <ProductsManager state={state} update={update} notify={notify} products={visibleProducts} go={go} />}
           {section === "orders" && <OrdersManager state={state} update={update} />}
           {section === "payouts" && <PayoutsManager state={state} update={update} balance={balance} />}
           {section === "settings" && <SettingsManager state={state} update={update} />}
@@ -1034,16 +1036,13 @@ function ChainOfThoughtCard({ statuses, running, ready, open, onToggle }: { stat
   );
 }
 
-function ProductsManager({ state, update, notify, products }: { state: State; update: CommonProps["update"]; notify: (m: string) => void; products: Product[] }) {
+function ProductsManager({ state, update, notify, products, go }: { state: State; update: CommonProps["update"]; notify: (m: string) => void; products: Product[]; go: (path: string) => void }) {
   function patchProduct(id: string, patch: Partial<Product>) {
     update((current) => ({ ...current, store: { ...current.store, products: current.store.products.map((product) => product.id === id ? { ...product, ...patch, source: patch.name || patch.description || patch.price ? "merchant" : product.source } : product) } }));
   }
   return (
     <>
-      <div className="row" style={{ justifyContent: "space-between" }}><h2>Products</h2><button className="btn-primary" onClick={() => {
-        update((current) => ({ ...current, store: { ...current.store, products: [...current.store.products, makeProduct({ name: "New Product", price: 5000, description: "Edit this product from your dashboard." }, current.store.products.length)] } }));
-        notify("Product created");
-      }}>Add product +</button></div>
+      <div className="row" style={{ justifyContent: "space-between" }}><h2>Products</h2><button className="btn-primary" onClick={() => go("/products/new")}>Add product +</button></div>
       <div className="table">
         {products.map((product) => (
           <div className="table-row" key={product.id}>
@@ -1051,10 +1050,115 @@ function ProductsManager({ state, update, notify, products }: { state: State; up
             <span>{money(product.price)}</span>
             <span className={`chip ${product.source === "ai" ? "gold" : product.inStock ? "mint" : "coral"}`}>{product.source === "ai" ? "⚡ AI Draft" : product.inStock ? "In stock" : "Out of stock"}</span>
             <button className="btn-ghost" onClick={() => patchProduct(product.id, { inStock: !product.inStock })}>{product.inStock ? "Mark out" : "Restock"}</button>
+            <button className="btn-ghost" onClick={() => go(`/products/${product.id}`)}>Edit</button>
             <button className="btn-danger" onClick={() => patchProduct(product.id, { deleted: true, featured: false })}>Delete</button>
           </div>
         ))}
       </div>
+    </>
+  );
+}
+
+function ProductEditorPage({ state, update, go, notify, mode }: CommonProps & { mode: "create" | "edit" }) {
+  const pathname = usePathname();
+  const productId = pathname.split("/").pop() || "";
+  const existing = mode === "edit" ? state.store.products.find((product) => product.id === productId) : undefined;
+  const [name, setName] = useState(existing?.name || "");
+  const [price, setPrice] = useState(existing ? String(existing.price) : "");
+  const [description, setDescription] = useState(existing?.description || "");
+  const [imageUrl, setImageUrl] = useState(existing?.imageUrl || "");
+  const [inStock, setInStock] = useState(existing?.inStock ?? true);
+
+  useEffect(() => {
+    setName(existing?.name || "");
+    setPrice(existing ? String(existing.price) : "");
+    setDescription(existing?.description || "");
+    setImageUrl(existing?.imageUrl || "");
+    setInStock(existing?.inStock ?? true);
+  }, [existing]);
+
+  async function uploadImage(file?: File | null) {
+    if (!file) {
+      return;
+    }
+
+    setImageUrl(await fileToDataUrl(file));
+  }
+
+  function saveProduct() {
+    if (!name.trim() || !price.trim()) {
+      notify("Product name and price are required");
+      return;
+    }
+
+    const parsedPrice = Number(price.replace(/\D/g, "")) || 0;
+    update((current) => {
+      const nextProducts = mode === "edit" && existing
+        ? current.store.products.map((product) => product.id === existing.id ? {
+          ...product,
+          name: name.trim(),
+          price: parsedPrice,
+          description: description.trim(),
+          imageUrl,
+          inStock,
+          source: "merchant"
+        } : product)
+        : [
+          ...current.store.products,
+          makeProduct({ name: name.trim(), price: parsedPrice, description: description.trim(), imageUrl }, current.store.products.length)
+        ];
+      const nextState = { ...current, store: { ...current.store, products: nextProducts }, activity: [`${mode === "edit" ? "Updated" : "Created"} product ${name.trim()}`, ...current.activity] };
+      persistState(nextState);
+      return nextState;
+    });
+    notify(mode === "edit" ? "Product updated" : "Product created");
+    go("/products");
+  }
+
+  if (mode === "edit" && !existing) {
+    return (
+      <>
+        <BrandNav state={state} update={update} go={go} />
+        <main className="container section-block page-with-dashboard-nav">
+          <div className="empty-state">
+            <p>This product could not be found.</p>
+            <button className="btn-ghost" onClick={() => go("/products")}>Back to products</button>
+          </div>
+        </main>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <BrandNav state={state} update={update} go={go} />
+      <main className="container section-block page-with-dashboard-nav">
+        <div className="form-card corner-marked product-editor-shell">
+          <Corners />
+          <button className="btn-ghost" onClick={() => go("/products")}>← Back to products</button>
+          <h2 style={{ marginTop: 24 }}>{mode === "edit" ? "Edit product" : "Add product"}</h2>
+          <div className="field-stack" style={{ marginTop: 24 }}>
+            <Field id="product-name" label="Product name" value={name} onChange={setName} />
+            <Field id="product-price" label="Price (₦)" value={price} onChange={setPrice} />
+            <Area id="product-description" label="Description" rows={6} value={description} onChange={setDescription} />
+            <AssetUploadField id="product-image" label="Product image upload" hint="Upload the product image shoppers will see on the storefront." onFileSelect={(file) => void uploadImage(file)} />
+            <div className="row" style={{ alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap" }}>
+              {imageUrl ? <div className="product-image-preview" style={{ backgroundImage: `url(${imageUrl})` }} /> : <div className="product-image-preview logo-preview-empty">IMAGE</div>}
+              {imageUrl ? <button className="btn-danger" onClick={() => setImageUrl("")}>Remove image</button> : null}
+            </div>
+            <div className="toggle-row">
+              <span className="field-label">Availability</span>
+              <button className={inStock ? "btn-primary" : "btn-ghost"} onClick={() => setInStock((current) => !current)} type="button">
+                {inStock ? "In stock" : "Out of stock"}
+              </button>
+            </div>
+          </div>
+          <div className="row" style={{ marginTop: 24, justifyContent: "space-between", flexWrap: "wrap" }}>
+            <button className="btn-ghost" onClick={() => go("/products")}>Discard</button>
+            <button className="btn-primary" onClick={saveProduct}>Save product</button>
+          </div>
+        </div>
+      </main>
     </>
   );
 }
@@ -1097,58 +1201,104 @@ function PayoutsManager({ state, update, balance }: { state: State; update: Comm
 }
 
 function SettingsManager({ state, update }: { state: State; update: CommonProps["update"] }) {
+  const locked = state.store.published;
+  const [storeName, setStoreName] = useState(state.store.name);
+  const [tagline, setTagline] = useState(state.store.heroCopy);
+  const [logoUrl, setLogoUrl] = useState(state.store.logoUrl || "");
+  const [heroImageUrl, setHeroImageUrl] = useState(state.store.heroImageUrl || "");
+
+  useEffect(() => {
+    setStoreName(state.store.name);
+    setTagline(state.store.heroCopy);
+    setLogoUrl(state.store.logoUrl || "");
+    setHeroImageUrl(state.store.heroImageUrl || "");
+  }, [state.store]);
+
   async function uploadAsset(kind: "logo" | "hero", file?: File | null) {
     if (!file) {
       return;
     }
 
     const dataUrl = await fileToDataUrl(file);
+    if (kind === "logo") {
+      setLogoUrl(dataUrl);
+      return;
+    }
+    setHeroImageUrl(dataUrl);
+  }
+
+  function saveSettings() {
+    if (locked) {
+      return;
+    }
+
     update((current) => {
       const nextState = {
         ...current,
         draft: {
           ...current.draft,
-          logoUrl: kind === "logo" ? dataUrl : current.draft.logoUrl,
-          heroImageUrl: kind === "hero" ? dataUrl : current.draft.heroImageUrl
+          storeName,
+          tagline,
+          logoUrl,
+          heroImageUrl
         },
         store: {
           ...current.store,
-          logoUrl: kind === "logo" ? dataUrl : current.store.logoUrl,
-          heroImageUrl: kind === "hero" ? dataUrl : current.store.heroImageUrl
-        }
+          name: storeName,
+          heroCopy: tagline,
+          logoUrl,
+          heroImageUrl
+        },
+        activity: [`Saved store settings for ${storeName}`, ...current.activity]
       };
       persistState(nextState);
       return nextState;
     });
   }
 
+  function clearAsset(kind: "logo" | "hero") {
+    if (kind === "logo") {
+      setLogoUrl("");
+      return;
+    }
+    setHeroImageUrl("");
+  }
+
   return (
     <>
       <h2>Settings</h2>
       <div className="field-stack" style={{ maxWidth: 720 }}>
-        <Field id="settings-name" label="Store name" value={state.store.name} onChange={(name) => update((current) => ({ ...current, store: { ...current.store, name } }))} />
-        <Field id="settings-tagline" label="Tagline" value={state.store.heroCopy} onChange={(heroCopy) => update((current) => ({ ...current, store: { ...current.store, heroCopy } }))} />
-        <AssetUploadField id="settings-logo" label="Store logo upload" hint="Upload the logo shown in your storefront navigation." onFileSelect={(file) => void uploadAsset("logo", file)} />
-        <AssetUploadField id="settings-hero-image" label="Hero background image upload" hint="Upload the background art used behind the storefront hero." onFileSelect={(file) => void uploadAsset("hero", file)} />
+        {locked ? <span className="chip gold">Store settings are locked while published</span> : null}
+        <Field id="settings-name" label="Store name" value={storeName} onChange={setStoreName} readOnly={locked} disabled={locked} />
+        <Field id="settings-tagline" label="Tagline" value={tagline} onChange={setTagline} readOnly={locked} disabled={locked} />
+        <AssetUploadField id="settings-logo" label="Store logo upload" hint="Upload the logo shown in your storefront navigation." disabled={locked} onFileSelect={(file) => void uploadAsset("logo", file)} />
+        <AssetUploadField id="settings-hero-image" label="Hero background image upload" hint="Upload the background art used behind the storefront hero." disabled={locked} onFileSelect={(file) => void uploadAsset("hero", file)} />
         <div className="row" style={{ alignItems: "flex-start" }}>
-          {state.store.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${state.store.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
-          {state.store.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${state.store.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
+          <div className="asset-preview-stack">
+            {logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
+            {logoUrl && !locked ? <button className="btn-danger" onClick={() => clearAsset("logo")}>Remove logo</button> : null}
+          </div>
+          <div className="asset-preview-stack">
+            {heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
+            {heroImageUrl && !locked ? <button className="btn-danger" onClick={() => clearAsset("hero")}>Remove hero</button> : null}
+          </div>
         </div>
         <p className="mono" style={{ color: "var(--color-gold)", fontSize: 10 }}>⚠ Slug is locked after publish and cannot be changed.</p>
+        <button className="btn-primary" disabled={locked} onClick={saveSettings}>Save changes</button>
       </div>
     </>
   );
 }
 
-function AssetUploadField({ id, label, hint, onFileSelect }: { id: string; label: string; hint: string; onFileSelect: (file?: File | null) => void }) {
+function AssetUploadField({ id, label, hint, onFileSelect, disabled }: { id: string; label: string; hint: string; onFileSelect: (file?: File | null) => void; disabled?: boolean }) {
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>{label}</label>
-      <label className="asset-upload" htmlFor={id}>
+      <label className={`asset-upload ${disabled ? "asset-upload-disabled" : ""}`} htmlFor={id}>
         <span className="asset-upload-copy">Choose image</span>
         <span className="asset-upload-hint">{hint}</span>
       </label>
-      <input id={id} className="asset-upload-input" type="file" accept="image/*" onChange={(event) => onFileSelect(event.target.files?.[0])} />
+      <input disabled={disabled} id={id} className="asset-upload-input" type="file" accept="image/*" onChange={(event) => onFileSelect(event.target.files?.[0])} />
     </div>
   );
 }
@@ -1169,6 +1319,7 @@ function PublicStore({ state, update, go, notify }: CommonProps) {
 function StorefrontRenderer({ store, products, cart, addToCart, go, preview }: { store: Store; products: Product[]; cart: CartLine[]; addToCart: (product: Product) => void; go?: (path: string) => void; preview?: boolean }) {
   const [searchQuery, setSearchQuery] = useState("");
   const featured = products.filter((product) => product.featured && product.source === "merchant" && product.inStock).slice(0, 4);
+  const searching = searchQuery.trim().length > 0;
   const filteredProducts = products.filter((product) => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) {
@@ -1177,6 +1328,13 @@ function StorefrontRenderer({ store, products, cart, addToCart, go, preview }: {
 
     return product.name.toLowerCase().includes(query) || (product.description || "").toLowerCase().includes(query);
   });
+
+  useEffect(() => {
+    if (searching) {
+      document.getElementById("store-products")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [searching, searchQuery]);
+
   if (!preview && !store.published) {
     return <main className="storefront-page store-hero"><div><h2>{store.name}</h2><StatusBadge>Temporarily unavailable</StatusBadge><p>This store is currently unavailable. Please check back soon.</p><span className="label">Powered by Aeris</span></div></main>;
   }
@@ -1199,8 +1357,8 @@ function StorefrontRenderer({ store, products, cart, addToCart, go, preview }: {
           <button className="btn-primary" onClick={() => document.getElementById("store-products")?.scrollIntoView({ behavior: "smooth", block: "start" })}>Shop now →</button>
         </div>
       </section>
-      <section className="section-block"><div className="container"><span className="label">Featured</span><h2>Hand-picked for you.</h2><div className="store-product-grid">{(featured.length ? featured : products).map((product) => <StoreProductCard key={product.id} product={product} addToCart={addToCart} />)}</div></div></section>
-      <section className="section-block" id="store-products"><div className="container"><span className="label">All products</span><h2>The collection.</h2><div className="store-product-grid">{filteredProducts.map((product) => <StoreProductCard key={`${product.id}-all`} product={product} addToCart={addToCart} />)}</div></div></section>
+      {!searching && <section className="section-block"><div className="container"><span className="label">Featured</span><h2>Hand-picked for you.</h2><div className="store-product-grid">{(featured.length ? featured : products).map((product) => <StoreProductCard key={product.id} product={product} addToCart={addToCart} />)}</div></div></section>}
+      <section className="section-block" id="store-products"><div className="container"><span className="label">{searching ? "Search results" : "All products"}</span><h2>{searching ? `Results for “${searchQuery.trim()}”` : "The collection."}</h2>{filteredProducts.length === 0 ? <div className="empty-state"><p>No products match this search yet.</p></div> : <div className="store-product-grid">{filteredProducts.map((product) => <StoreProductCard key={`${product.id}-all`} product={product} addToCart={addToCart} />)}</div>}</div></section>
       <footer className="section-block"><div className="container row" style={{ justifyContent: "space-between" }}><span>{store.name} · {store.city} · {store.category}</span><span className="label">Powered by Aeris</span></div></footer>
     </main>
   );
@@ -1209,7 +1367,7 @@ function StorefrontRenderer({ store, products, cart, addToCart, go, preview }: {
 function StoreProductCard({ product, addToCart }: { product: Product; addToCart: (product: Product) => void }) {
   return (
     <article className="product-card">
-      <div className="product-image">{product.name}</div>
+      <div className="product-image" style={product.imageUrl ? { backgroundImage: `url(${product.imageUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}>{product.imageUrl ? "" : product.name}</div>
       <div className="product-body">
         {product.source === "ai" && <span className="chip gold">⚡ AI Draft</span>}
         {!product.inStock && <span className="chip coral">Out of stock</span>}
@@ -1222,7 +1380,7 @@ function StoreProductCard({ product, addToCart }: { product: Product; addToCart:
   );
 }
 
-function CartPage({ state, go }: CommonProps) {
+function CartPage({ state, go, update }: CommonProps) {
   const products = state.cart.map((line) => ({ line, product: state.store.products.find((product) => product.id === line.productId) })).filter((entry) => entry.product);
   const totals = calculateCheckout(state.store.products, state.cart, state.store.city);
   return (
@@ -1231,25 +1389,22 @@ function CartPage({ state, go }: CommonProps) {
       <main className="container section-block page-with-store-nav">
         <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>← Continue shopping</button>
         <h2 style={{ marginTop: 32 }}>Your cart</h2>
-        {products.length === 0 ? <div className="empty-state"><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>Continue shopping →</button></div> : <CartContents state={state} go={go} totals={totals} />}
+        {products.length === 0 ? <div className="empty-state"><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>Continue shopping →</button></div> : <CartContents state={state} go={go} update={update} totals={totals} />}
     </main>
     </>
   );
 }
 
-function CartContents({ state, go, totals }: { state: State; go: (path: string) => void; totals: ReturnType<typeof calculateCheckout> }) {
+function CartContents({ state, go, update, totals }: { state: State; go: (path: string) => void; update: CommonProps["update"]; totals: ReturnType<typeof calculateCheckout> }) {
   function mutateCart(productId: string, nextQuantity: number) {
-    const saved = localStorage.getItem("aeris-product-state");
-    if (!saved) {
-      return;
-    }
-
-    const current = JSON.parse(saved) as State;
-    const cart = nextQuantity <= 0
-      ? current.cart.filter((line) => line.productId !== productId)
-      : current.cart.map((line) => line.productId === productId ? { ...line, quantity: nextQuantity } : line);
-    localStorage.setItem("aeris-product-state", JSON.stringify({ ...current, cart }));
-    window.location.href = "/cart";
+    update((current) => {
+      const cart = nextQuantity <= 0
+        ? current.cart.filter((line) => line.productId !== productId)
+        : current.cart.map((line) => line.productId === productId ? { ...line, quantity: nextQuantity } : line);
+      const nextState = { ...current, cart };
+      persistState(nextState);
+      return nextState;
+    });
   }
 
   const products = state.cart

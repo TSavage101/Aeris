@@ -271,6 +271,11 @@ hr,
   transition: border-color var(--dur-fast) var(--ease-snap);
 }
 
+.field-input:disabled {
+  background: var(--color-paper);
+  color: rgba(58, 58, 56, 0.6);
+}
+
 .field-input:focus {
   border-color: var(--color-forest);
 }
@@ -1049,6 +1054,11 @@ textarea.field-input {
   padding: var(--space-4);
 }
 
+.asset-upload-disabled {
+  background: var(--color-paper);
+  color: rgba(58, 58, 56, 0.58);
+}
+
 .asset-upload-copy {
   color: var(--color-forest);
   font-family: var(--font-mono);
@@ -1073,6 +1083,37 @@ textarea.field-input {
 
 .editor-note {
   font-size: var(--text-14);
+}
+
+.asset-preview-stack {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.product-editor-shell {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.page-with-dashboard-nav {
+  padding-top: calc(var(--space-20) + 52px);
+}
+
+.product-image-preview {
+  width: 200px;
+  height: 200px;
+  border: var(--border-hair);
+  background-color: var(--color-paper);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
 }
 
 .editor-preview-panel {
