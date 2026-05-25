@@ -141,6 +141,34 @@ function fileToDataUrl(file: File) {
   });
 }
 
+function normalizeState(saved: Partial<State>): State {
+  return {
+    ...initialState,
+    ...saved,
+    draft: {
+      ...initialState.draft,
+      ...(saved.draft || {})
+    },
+    store: {
+      ...initialState.store,
+      ...(saved.store || {}),
+      theme: {
+        ...initialState.store.theme,
+        ...(saved.store?.theme || {})
+      },
+      products: saved.store?.products || initialState.store.products
+    },
+    orders: saved.orders || initialState.orders,
+    payouts: saved.payouts || initialState.payouts,
+    cart: saved.cart || initialState.cart,
+    activity: saved.activity || initialState.activity,
+    auth: {
+      ...initialState.auth,
+      ...(saved.auth || {})
+    }
+  };
+}
+
 function rgbToHex(r: number, g: number, b: number) {
   return `#${[r, g, b].map((value) => Math.max(0, Math.min(255, value)).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
 }
@@ -214,7 +242,7 @@ export function AerisProduct() {
   useEffect(() => {
     const saved = localStorage.getItem("aeris-product-state");
     if (saved) {
-      setState(JSON.parse(saved) as State);
+      setState(normalizeState(JSON.parse(saved) as Partial<State>));
     }
     setHydrated(true);
   }, []);
@@ -230,10 +258,10 @@ export function AerisProduct() {
       return;
     }
 
-    if (isMerchantPath && !state.auth.loggedIn) {
+    if (isMerchantPath && !state.auth?.loggedIn) {
       router.replace("/login");
     }
-  }, [hydrated, isMerchantPath, pathname, router, state.auth.loggedIn]);
+  }, [hydrated, isMerchantPath, pathname, router, state.auth?.loggedIn]);
 
   function go(path: string) {
     router.push(path);
@@ -258,14 +286,14 @@ export function AerisProduct() {
       {pathname === "/onboarding/preview" && <Preview {...common} />}
       {pathname === "/claim" && <Claim {...common} />}
       {pathname === "/login" && <Login {...common} />}
-      {state.auth.loggedIn && ["/dashboard", "/store"].includes(pathname) && <Dashboard {...common} section="store" />}
-      {state.auth.loggedIn && pathname === "/store/editor" && <Dashboard {...common} section="editor" />}
-      {state.auth.loggedIn && pathname === "/products" && <Dashboard {...common} section="products" />}
-      {state.auth.loggedIn && pathname === "/products/new" && <ProductEditorPage {...common} mode="create" />}
-      {state.auth.loggedIn && pathname.startsWith("/products/") && pathname !== "/products" && pathname !== "/products/new" && <ProductEditorPage {...common} mode="edit" />}
-      {state.auth.loggedIn && pathname === "/orders" && <Dashboard {...common} section="orders" />}
-      {state.auth.loggedIn && pathname === "/payouts" && <Dashboard {...common} section="payouts" />}
-      {state.auth.loggedIn && pathname === "/settings" && <Dashboard {...common} section="settings" />}
+      {state.auth?.loggedIn && ["/dashboard", "/store"].includes(pathname) && <Dashboard {...common} section="store" />}
+      {state.auth?.loggedIn && pathname === "/store/editor" && <Dashboard {...common} section="editor" />}
+      {state.auth?.loggedIn && pathname === "/products" && <Dashboard {...common} section="products" />}
+      {state.auth?.loggedIn && pathname === "/products/new" && <ProductEditorPage {...common} mode="create" />}
+      {state.auth?.loggedIn && pathname.startsWith("/products/") && pathname !== "/products" && pathname !== "/products/new" && <ProductEditorPage {...common} mode="edit" />}
+      {state.auth?.loggedIn && pathname === "/orders" && <Dashboard {...common} section="orders" />}
+      {state.auth?.loggedIn && pathname === "/payouts" && <Dashboard {...common} section="payouts" />}
+      {state.auth?.loggedIn && pathname === "/settings" && <Dashboard {...common} section="settings" />}
       {pathname.startsWith("/s/") && <PublicStore {...common} />}
       {pathname === "/cart" && <CartPage {...common} />}
       {pathname === "/checkout" && <CheckoutPage {...common} />}

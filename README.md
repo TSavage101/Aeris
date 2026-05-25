@@ -74,11 +74,22 @@ Run tests:
 npm test
 ```
 
+Start local infrastructure:
+
+```bash
+docker compose up -d
+```
+
 Build for production:
 
 ```bash
 npm run build
 ```
+
+The repo includes:
+
+- [docker-compose.yml](C:/Hackathon%20Projects/Aeris/docker-compose.yml) for local Postgres and Redis
+- [\.env.example](C:/Hackathon%20Projects/Aeris/.env.example) with matching connection defaults
 
 ## Important Routes
 
