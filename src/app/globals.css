@@ -709,12 +709,24 @@ textarea.field-input {
   gap: var(--space-5, 20px);
 }
 
+.field-error {
+  border-color: var(--color-coral);
+}
+
+.form-error {
+  color: var(--color-coral);
+}
+
 .product-entry {
   display: grid;
   grid-template-columns: 1.4fr 0.8fr 1.3fr 1.4fr auto;
   gap: var(--space-3);
   border: var(--border-hair);
   padding: var(--space-4);
+}
+
+.product-image-field {
+  align-content: start;
 }
 
 .color-visualizer {
@@ -763,6 +775,10 @@ textarea.field-input {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-4);
+}
+
+.rgb-number-input {
+  text-align: center;
 }
 
 .slug-row {
@@ -963,6 +979,16 @@ textarea.field-input {
   background-size: cover;
 }
 
+.product-thumb-preview {
+  width: 96px;
+  height: 96px;
+  border: var(--border-hair);
+  background-color: var(--color-paper);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
 .utility-nav {
   position: fixed;
   right: 0;
@@ -1125,6 +1151,27 @@ textarea.field-input {
   border: var(--border-hair);
   background: var(--color-white);
   padding: 20px 24px;
+}
+
+.generating-loader .orbit {
+  animation: loader-spin 12s linear infinite;
+}
+
+.generating-loader .orbit-node {
+  animation: loader-pulse 1.4s ease-in-out infinite;
+}
+
+.loader-core {
+  position: absolute;
+  inset: calc(50% - 8px);
+  width: 16px;
+  height: 16px;
+  background: var(--color-mint);
+  animation: loader-core-pulse 900ms var(--ease-snap) infinite;
+}
+
+.generating-line {
+  animation: generating-line-in 240ms var(--ease-snap);
 }
 
 .chain-trigger {
@@ -1355,6 +1402,53 @@ textarea.field-input {
   }
   100% {
     opacity: 0.55;
+  }
+}
+
+@keyframes loader-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes loader-core-pulse {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.9);
+    opacity: 0.7;
+  }
+}
+
+@keyframes loader-pulse {
+  0% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes generating-line-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }
 

@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import type { CSSProperties } from "react";
-import type { CartLine, CheckoutDetails, Order, OrderStatus, PayoutRequest, Product, Store, SupportedCity } from "@/lib/aeris";
+import type { CartLine, CheckoutDetails, Order, OrderStatus, PayoutRequest, Product, ProductSource, Store, SupportedCity } from "@/lib/aeris";
 import { useEffect, useMemo, useState } from "react";
 import {
   SUPPORTED_CITIES,
@@ -20,9 +20,10 @@ import {
 } from "@/lib/aeris";
 
 type Draft = {
+  leadEmail: string;
   storeName: string;
   category: string;
-  city: SupportedCity;
+  city: SupportedCity | "";
   description: string;
   bankName: string;
   accountNumber: string;
@@ -49,31 +50,36 @@ type State = {
 };
 
 const defaultDraft: Draft = {
-  storeName: "Terra Basket",
-  category: "Food & Groceries",
-  city: "Lagos",
-  description: "Fresh pantry bundles, party trays, and weekly provisions for busy Lagos homes.",
-  bankName: "Kora Demo Bank",
-  accountNumber: "0123456789",
-  accountName: "Terra Basket Foods",
+  leadEmail: "",
+  storeName: "",
+  category: "",
+  city: "",
+  description: "",
+  bankName: "",
+  accountNumber: "",
+  accountName: "",
   primary: "#1A3C2B",
-  tagline: "Fresh provisions delivered across Lagos.",
+  tagline: "",
   logoUrl: "",
   heroImageUrl: "",
-  productsText:
-    "Smoked Jollof Party Tray | 18500 | Family-size smoky jollof rice with fried plantain\nPalm Oil Pantry Set | 14500 | Local pantry staples packed for weekly cooking"
+  productsText: ""
 };
 
 function buildStore(draft: Draft): Store {
   const merchantProducts = parseProductsBulk(draft.productsText).map((product, index) => makeProduct(product, index));
-  const products = [...merchantProducts, ...generateAiProducts(draft.category, Math.max(0, 3 - merchantProducts.length), merchantProducts.length)];
+  const products = merchantProducts.length
+    ? [...merchantProducts, ...generateAiProducts(draft.category, Math.max(0, 3 - merchantProducts.length), merchantProducts.length)]
+    : generateAiProducts(draft.category || "General", 3, 0);
+  const storeName = draft.storeName.trim() || "Aeris Store";
+  const category = draft.category || "General";
+  const city = draft.city || "Lagos";
 
   return {
     id: cryptoId("store"),
-    slug: slugify(draft.storeName),
-    name: draft.storeName,
-    city: draft.city,
-    category: draft.category,
+    slug: slugify(storeName),
+    name: storeName,
+    city,
+    category,
     logoUrl: draft.logoUrl,
     heroImageUrl: draft.heroImageUrl,
     bankVerified: draft.accountNumber.length === 10,
@@ -85,8 +91,8 @@ function buildStore(draft: Draft): Store {
       accent: "#9EFFBF",
       template: "provisions"
     },
-    heroTitle: `${draft.storeName.toUpperCase()} DELIVERED FAST.`,
-    heroCopy: draft.tagline,
+    heroTitle: `${storeName.toUpperCase()} DELIVERED FAST.`,
+    heroCopy: draft.tagline.trim() || `Discover curated ${category.toLowerCase()} offers built for shoppers in ${city}.`,
     products
   };
 }
@@ -121,6 +127,26 @@ function serializeProducts(products: Array<{ name: string; price: number; descri
   return products
     .map((product) => `${product.name} | ${product.price || ""} | ${product.description || ""} | ${product.imageUrl || ""}`)
     .join("\n");
+}
+
+function emailLooksValid(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function onboardingSeed(category: string) {
+  return generateAiProducts(category || "General", 2, 0).map((product) => ({
+    name: product.name,
+    price: product.price,
+    description: product.description || "",
+    imageUrl: product.imageUrl || ""
+  }));
+}
+
+function resetDraftState(leadEmail = ""): Draft {
+  return {
+    ...defaultDraft,
+    leadEmail
+  };
 }
 
 function hexToRgb(hex: string) {
@@ -175,6 +201,33 @@ function rgbToHex(r: number, g: number, b: number) {
 
 function isSlugAvailable(slug: string, currentSlug?: string) {
   return slug.length >= 3 && (slug === currentSlug || !RESERVED_SLUGS.has(slug));
+}
+
+function slugFieldState(slug: string, currentSlug?: string) {
+  if (!slug.trim()) {
+    return { available: false, invalid: false, message: "Enter a store slug" };
+  }
+  if (slug.length < 3) {
+    return { available: false, invalid: true, message: "Slug must be at least 3 characters" };
+  }
+  if (slug === currentSlug) {
+    return { available: true, invalid: false, message: "Available" };
+  }
+  if (RESERVED_SLUGS.has(slug)) {
+    return { available: false, invalid: true, message: "This slug is already taken" };
+  }
+  return { available: true, invalid: false, message: "Available" };
+}
+
+function isEmailTaken(state: State, email: string) {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return [state.auth.email, state.store.ownerEmail]
+    .filter(Boolean)
+    .some((candidate) => candidate?.trim().toLowerCase() === normalized);
 }
 
 function persistState(nextState: State) {
@@ -367,7 +420,7 @@ function BrandNav({ state, update, go }: Pick<CommonProps, "state" | "update" | 
       </button>
       <div className="nav-actions">
         <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>
-          View store ↗
+          View store
         </button>
         <button
           className="btn-primary"
@@ -388,19 +441,24 @@ function BrandNav({ state, update, go }: Pick<CommonProps, "state" | "update" | 
               <span className="logo-box">A</span>
               <span className="wordmark">AERIS</span>
             </div>
-            {links.map(([href, label]) => (
-              <button
-                className={`nav-link ${pathname === href ? "active" : ""}`}
-                key={href}
-                onClick={() => {
-                  setDrawerOpen(false);
-                  go(href);
-                }}
-              >
-                {label}
-              </button>
-            ))}
-            <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>View store ↗</button>
+            <div className="mobile-drawer-nav">
+              {links.map(([href, label]) => (
+                <button
+                  className={`nav-link ${pathname === href ? "active" : ""}`}
+                  key={href}
+                  onClick={() => {
+                    setDrawerOpen(false);
+                    go(href);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+              <button className="nav-link" onClick={() => {
+                setDrawerOpen(false);
+                go(`/s/${state.store.slug}`);
+              }}>View store</button>
+            </div>
           </aside>
         </>
       )}
@@ -408,12 +466,36 @@ function BrandNav({ state, update, go }: Pick<CommonProps, "state" | "update" | 
   );
 }
 
-function Landing({ go }: CommonProps) {
+function Landing({ state, update, go, notify }: CommonProps) {
+  const [email, setEmail] = useState(state.draft.leadEmail);
+  const emailTaken = isEmailTaken(state, email);
+  const invalidEmail = email.trim().length > 0 && !emailLooksValid(email);
+
+  function startOnboarding() {
+    if (!emailLooksValid(email)) {
+      notify("Enter a valid email address");
+      return;
+    }
+
+    if (emailTaken) {
+      notify("That email is already attached to a merchant account");
+      return;
+    }
+
+    const nextDraft = resetDraftState(email.trim().toLowerCase());
+    update((current) => ({
+      ...current,
+      draft: nextDraft,
+      store: buildStore(nextDraft)
+    }));
+    go("/onboarding");
+  }
+
   return (
     <>
       <section className="container landing-hero">
         <div>
-          <StatusBadge>AERIS MVP — AFRICAN COMMERCE INFRASTRUCTURE</StatusBadge>
+          <StatusBadge>AERIS MVP - AFRICAN COMMERCE INFRASTRUCTURE</StatusBadge>
           <h1 className="hero-lines">
             <span>LAUNCH YOUR</span>
             <span>STORE IN</span>
@@ -421,8 +503,8 @@ function Landing({ go }: CommonProps) {
           </h1>
           <div className="subtext-rail">AI-powered storefronts. Real payments. Built for African merchants.</div>
           <div className="row">
-            <button className="btn-primary" onClick={() => go("/onboarding")}>
-              Start building →
+            <button className="btn-primary" onClick={startOnboarding}>
+              Start building
             </button>
             <button className="btn-ghost" onClick={() => go("/s/terra-basket")}>
               View demo
@@ -444,7 +526,7 @@ function Landing({ go }: CommonProps) {
               <div>JOLLOF TRAY</div>
               <div>PALM OIL SET</div>
               <div>MARKET BUNDLE</div>
-              <div>₦45,500 TOTAL</div>
+              <div>NGN 45,500 TOTAL</div>
             </div>
           </div>
         </div>
@@ -469,10 +551,12 @@ function Landing({ go }: CommonProps) {
             <Corners />
             <div className="field">
               <label className="field-label" htmlFor="landing-email">Your email address</label>
-              <input id="landing-email" className="field-input" placeholder="merchant@example.com" />
+              <input id="landing-email" className={`field-input ${invalidEmail || emailTaken ? "field-error" : ""}`} placeholder="merchant@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
             </div>
-            <button className="btn-primary" style={{ width: "100%", marginTop: 16 }} onClick={() => go("/onboarding")}>
-              Start building →
+            {invalidEmail ? <span className="label form-error">X Enter a valid email address</span> : null}
+            {emailTaken ? <span className="label form-error">X This email is already in use</span> : null}
+            <button className="btn-primary" style={{ width: "100%", marginTop: 16 }} onClick={startOnboarding} disabled={!emailLooksValid(email) || emailTaken}>
+              Start building
             </button>
           </div>
         </div>
@@ -518,7 +602,7 @@ function Onboarding({ state, update, go }: CommonProps) {
       return;
     }
 
-    setProducts([...parsedProducts, { name: `New Product ${parsedProducts.length + 1}`, price: 1000, description: "", imageUrl: "" }]);
+    setProducts([...parsedProducts, { name: "", price: 0, description: "", imageUrl: "" }]);
   }
 
   function removeProductRow(index: number) {
@@ -529,10 +613,27 @@ function Onboarding({ state, update, go }: CommonProps) {
     setProducts(parsedProducts.filter((_, productIndex) => productIndex !== index));
   }
 
-  function attachCloudinaryImage(index: number, fileName: string) {
-    const safeName = slugify(fileName.replace(/\.[^.]+$/, "") || `product-${index + 1}`);
-    updateProductRow(index, { imageUrl: `cloudinary://aeris-products/${safeName}` });
+  async function attachProductImage(index: number, file?: File | null) {
+    if (!file) {
+      return;
+    }
+
+    updateProductRow(index, { imageUrl: await fileToDataUrl(file) });
   }
+
+  async function attachBrandAsset(kind: "logoUrl" | "heroImageUrl", file?: File | null) {
+    if (!file) {
+      return;
+    }
+
+    setDraft({ [kind]: await fileToDataUrl(file) } as Partial<Draft>);
+  }
+
+  useEffect(() => {
+    if (step === 3 && parsedProducts.length === 0) {
+      setProducts(onboardingSeed(draft.category));
+    }
+  }, [draft.category, parsedProducts.length, step]);
 
   function next() {
     if (step < 5) {
@@ -552,7 +653,7 @@ function Onboarding({ state, update, go }: CommonProps) {
           <span className="wordmark">AERIS</span>
         </button>
         <span className="label">Step {String(step).padStart(2, "0")} of 05</span>
-        <button className="btn-ghost" onClick={() => (step === 1 ? go("/") : setStep(step - 1))}>← Back</button>
+        <button className="btn-ghost" onClick={() => (step === 1 ? go("/") : setStep(step - 1))}>Back</button>
       </header>
       <div className="progress-track"><div className="progress-fill" style={{ width: `${progress}%` }} /></div>
       {step === 1 && (
@@ -561,12 +662,18 @@ function Onboarding({ state, update, go }: CommonProps) {
           <h2>Tell us about your business.</h2>
           <p>Give Aeris the operating details it needs to generate a relevant storefront.</p>
           <div className="field-stack">
-            <Field id="store-name" label="Store name" value={draft.storeName} onChange={(storeName) => setDraft({ storeName })} />
-            <Select id="category" label="Business category" value={draft.category} onChange={(category) => setDraft({ category })} options={["Fashion", "Electronics", "Food & Groceries", "Beauty & Health", "Home & Living", "Sports & Fitness", "Books & Stationery", "Other"]} />
-            <Select id="city" label="Supported city" value={draft.city} onChange={(city) => setDraft({ city: city as SupportedCity })} options={[...SUPPORTED_CITIES]} />
-            <Area id="description" label="Short business description" value={draft.description} onChange={(description) => setDraft({ description })} rows={4} />
+            <Field id="store-name" label="Store name" value={draft.storeName} placeholder="Bayode Foods" onChange={(storeName) => setDraft({ storeName })} />
+            <Select id="category" label="Business category" value={draft.category} placeholder="Choose a category" onChange={(category) => setDraft({ category })} options={["Fashion", "Electronics", "Food & Groceries", "Beauty & Health", "Home & Living", "Sports & Fitness", "Books & Stationery", "Other"]} />
+            <Select id="city" label="Supported city" value={draft.city} placeholder="Choose a supported city" onChange={(city) => setDraft({ city: city as SupportedCity })} options={[...SUPPORTED_CITIES]} />
+            <Area id="description" label="Short business description" value={draft.description} placeholder="We deliver fresh groceries and ready-to-cook essentials across Lagos." onChange={(description) => setDraft({ description })} rows={4} />
+            <AssetUploadField id="draft-logo" label="Store logo upload" hint="Upload an optional logo for your storefront navigation." onFileSelect={(file) => void attachBrandAsset("logoUrl", file)} />
+            <AssetUploadField id="draft-hero" label="Hero image upload" hint="Upload optional hero art for your storefront landing section." onFileSelect={(file) => void attachBrandAsset("heroImageUrl", file)} />
+            <div className="row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+              {draft.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${draft.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
+              {draft.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${draft.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
+            </div>
           </div>
-          <button className="btn-primary" onClick={next} disabled={!draft.storeName || !draft.category || !draft.city}>Next step →</button>
+          <button className="btn-primary" onClick={next} disabled={!draft.storeName || !draft.category || !draft.city}>Next step</button>
         </div>
       )}
       {step === 2 && (
@@ -574,12 +681,12 @@ function Onboarding({ state, update, go }: CommonProps) {
           <span className="label">02. Payout account</span>
           <h2>Where should we send your money?</h2>
           <div className="field-stack">
-            <Select id="bank" label="Bank name" value={draft.bankName} onChange={(bankName) => setDraft({ bankName })} options={["Kora Demo Bank", "Access Bank", "GTBank", "Zenith Bank", "UBA", "First Bank"]} />
-            <Field id="account-number" label="Account number" value={draft.accountNumber} onChange={(accountNumber) => setDraft({ accountNumber: accountNumber.replace(/\D/g, "").slice(0, 10), accountName: accountNumber.length >= 9 ? draft.accountName : "" })} />
-            <Field id="account-name" label="Account name" value={draft.accountNumber.length === 10 ? draft.accountName || "Terra Basket Foods" : ""} onChange={(accountName) => setDraft({ accountName })} readOnly={draft.accountNumber.length === 10} />
-            {draft.accountNumber.length === 10 ? <StatusBadge>✓ Account verified</StatusBadge> : <span className="label">Enter 10 digits to verify account...</span>}
+            <Select id="bank" label="Bank name" value={draft.bankName} placeholder="Select your bank" onChange={(bankName) => setDraft({ bankName })} options={["Access Bank", "GTBank", "Zenith Bank", "UBA", "First Bank"]} />
+            <Field id="account-number" label="Account number" value={draft.accountNumber} placeholder="0123456789" onChange={(accountNumber) => setDraft({ accountNumber: accountNumber.replace(/\D/g, "").slice(0, 10), accountName: accountNumber.length >= 9 ? draft.accountName : "" })} />
+            <Field id="account-name" label="Account name" value={draft.accountNumber.length === 10 ? draft.accountName || "Verified account name" : ""} placeholder="Verified account name appears here" onChange={(accountName) => setDraft({ accountName })} readOnly={draft.accountNumber.length === 10} />
+            {draft.accountNumber.length === 10 ? <StatusBadge>Account verified</StatusBadge> : <span className="label">Enter 10 digits to verify account...</span>}
           </div>
-          <button className="btn-primary" onClick={next} disabled={draft.accountNumber.length !== 10}>Next step →</button>
+          <button className="btn-primary" onClick={next} disabled={draft.accountNumber.length !== 10}>Next step</button>
         </div>
       )}
       {step === 3 && (
@@ -593,7 +700,7 @@ function Onboarding({ state, update, go }: CommonProps) {
           </div>
           {mode === "bulk" ? (
             <>
-              <Area id="bulk" label="Paste products" rows={10} value={draft.productsText} onChange={(productsText) => setDraft({ productsText })} />
+              <Area id="bulk" label="Paste products" rows={10} value={draft.productsText} placeholder="Classic Ankara Dress | 12000 | Hand-crafted dress |" onChange={(productsText) => setDraft({ productsText })} />
               <div className="table">
                 {parsedProducts.map((product) => (
                   <div className="table-row" key={product.name}>
@@ -606,24 +713,15 @@ function Onboarding({ state, update, go }: CommonProps) {
             <div className="field-stack">
               {parsedProducts.map((product, index) => (
                 <div className="product-entry" key={`${product.name}-${index}`}>
-                  <Field id={`p-name-${index}`} label="Product name" value={product.name} onChange={(name) => updateProductRow(index, { name })} />
-                  <Field id={`p-price-${index}`} label="Price (NGN)" value={String(product.price)} onChange={(price) => updateProductRow(index, { price: Number(price.replace(/\D/g, "")) || 0 })} />
-                  <Field id={`p-desc-${index}`} label="Description" value={product.description || ""} onChange={(description) => updateProductRow(index, { description })} />
-                  <div className="field">
-                    <label className="field-label" htmlFor={`p-img-${index}`}>Product image</label>
-                    <input
-                      id={`p-img-${index}`}
-                      className="field-input"
-                      type="file"
-                      accept="image/*"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (file) {
-                          attachCloudinaryImage(index, file.name);
-                        }
-                      }}
-                    />
-                    <span className="label">{product.imageUrl ? `Stored in Cloudinary bucket: ${product.imageUrl}` : "Upload to Aeris Cloudinary bucket"}</span>
+                  <Field id={`p-name-${index}`} label="Product name" value={product.name} placeholder="Smoked Jollof Party Tray" onChange={(name) => updateProductRow(index, { name })} />
+                  <Field id={`p-price-${index}`} label="Price (NGN)" value={String(product.price || "")} placeholder="18500" onChange={(price) => updateProductRow(index, { price: Number(price.replace(/\D/g, "")) || 0 })} />
+                  <Field id={`p-desc-${index}`} label="Description" value={product.description || ""} placeholder="Family-size smoky jollof rice with fried plantain." onChange={(description) => updateProductRow(index, { description })} />
+                  <div className="field product-image-field">
+                    <AssetUploadField id={`p-img-${index}`} label="Product image" hint="Choose a product image for this storefront listing." onFileSelect={(file) => void attachProductImage(index, file)} />
+                    <div className="row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+                      {product.imageUrl ? <div className="product-thumb-preview" style={{ backgroundImage: `url(${product.imageUrl})` }} /> : <div className="product-thumb-preview logo-preview-empty">IMAGE</div>}
+                      {product.imageUrl ? <button className="btn-danger" type="button" onClick={() => updateProductRow(index, { imageUrl: "" })}>Remove image</button> : null}
+                    </div>
                   </div>
                   <button className="btn-danger" aria-label="Delete product" disabled={parsedProducts.length <= 1} onClick={() => removeProductRow(index)}>x</button>
                 </div>
@@ -634,7 +732,7 @@ function Onboarding({ state, update, go }: CommonProps) {
               {parsedProducts.length >= 10 && <span className="label">Maximum 10 products</span>}
             </div>
           )}
-          <button className="btn-primary" onClick={next} disabled={parsedProducts.length < 1}>Next step →</button>
+          <button className="btn-primary" onClick={next} disabled={parsedProducts.length < 1}>Next step</button>
         </div>
       )}
       {step === 4 && (
@@ -644,12 +742,12 @@ function Onboarding({ state, update, go }: CommonProps) {
             <h2>Make it yours.</h2>
             <div className="field-stack">
               <BrandColorPicker color={draft.primary} onChange={(primary) => setDraft({ primary })} />
-              <Field id="tagline" label="Store tagline" value={draft.tagline} onChange={(tagline) => setDraft({ tagline: tagline.slice(0, 80) })} />
+              <Field id="tagline" label="Store tagline" value={draft.tagline} placeholder="Fresh grocery bundles delivered fast across Lagos." onChange={(tagline) => setDraft({ tagline: tagline.slice(0, 80) })} />
               <span className="label">{draft.tagline.length} / 80</span>
             </div>
           </div>
           <MiniStorePreview draft={draft} />
-          <button className="btn-primary" onClick={next}>Next step →</button>
+          <button className="btn-primary" onClick={next}>Next step</button>
         </div>
       )}
       {step === 5 && (
@@ -658,41 +756,41 @@ function Onboarding({ state, update, go }: CommonProps) {
           <h2>Ready to generate.</h2>
           <div className="form-card corner-marked">
             <Corners />
-            <p><strong>{draft.storeName}</strong> · {draft.category} · {draft.city}</p>
-            <p>{draft.bankName} · {draft.accountNumber} · Verified</p>
+            <p><strong>{draft.storeName || "Aeris Store"}</strong> - {draft.category || "General"} - {draft.city || "Lagos"}</p>
+            <p>{draft.bankName || "No bank selected"} - {draft.accountNumber || "No account"} - Verified</p>
             <p>{parsedProducts.length} products added</p>
             <p><span style={{ display: "inline-block", width: 20, height: 20, background: draft.primary, verticalAlign: "middle" }} /> {draft.primary}</p>
           </div>
-          <button className="btn-primary" style={{ height: 56, fontSize: 18 }} onClick={next}>Generate my store →</button>
+          <button className="btn-primary" style={{ height: 56, fontSize: 18 }} onClick={next}>Generate my store</button>
         </div>
       )}
     </div>
   );
 }
-
-function Field({ id, label, value, onChange, readOnly, disabled }: { id: string; label: string; value: string; onChange: (value: string) => void; readOnly?: boolean; disabled?: boolean }) {
+function Field({ id, label, value, onChange, readOnly, disabled, placeholder, className, type = "text" }: { id: string; label: string; value: string; onChange: (value: string) => void; readOnly?: boolean; disabled?: boolean; placeholder?: string; className?: string; type?: "text" | "email" | "password" | "number" }) {
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>{label}</label>
-      <input id={id} className="field-input" disabled={disabled} value={value} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} />
+      <input id={id} type={type} className={`field-input ${className || ""}`.trim()} disabled={disabled} placeholder={placeholder} value={value} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }
 
-function Area({ id, label, value, onChange, rows }: { id: string; label: string; value: string; onChange: (value: string) => void; rows: number }) {
+function Area({ id, label, value, onChange, rows, placeholder }: { id: string; label: string; value: string; onChange: (value: string) => void; rows: number; placeholder?: string }) {
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>{label}</label>
-      <textarea id={id} className="field-input" rows={rows} value={value} onChange={(event) => onChange(event.target.value)} />
+      <textarea id={id} className="field-input" rows={rows} placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }
 
-function Select({ id, label, value, onChange, options }: { id: string; label: string; value: string; onChange: (value: string) => void; options: string[] }) {
+function Select({ id, label, value, onChange, options, placeholder }: { id: string; label: string; value: string; onChange: (value: string) => void; options: string[]; placeholder?: string }) {
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>{label}</label>
       <select id={id} className="field-input" value={value} onChange={(event) => onChange(event.target.value)}>
+        {placeholder ? <option value="" disabled>{placeholder}</option> : null}
         {options.map((option) => <option key={option}>{option}</option>)}
       </select>
     </div>
@@ -739,7 +837,16 @@ function BrandColorPicker({ color, onChange }: { color: string; onChange: (color
               value={rgb[channel]}
               onChange={(event) => setChannel(channel, Number(event.target.value))}
             />
-            <span className="label">{rgb[channel]}</span>
+            <input
+              className="field-input rgb-number-input"
+              inputMode="numeric"
+              maxLength={3}
+              value={String(rgb[channel])}
+              onChange={(event) => {
+                const nextValue = Number(event.target.value.replace(/\D/g, "").slice(0, 3));
+                setChannel(channel, Number.isFinite(nextValue) ? Math.min(255, nextValue) : 0);
+              }}
+            />
           </label>
         ))}
       </div>
@@ -751,26 +858,51 @@ function MiniStorePreview({ draft }: { draft: Draft }) {
   return (
     <div className="store-card" style={{ padding: 24 }}>
       <span className="label">Live preview</span>
-      <h3>{draft.storeName}</h3>
-      <p>{draft.tagline}</p>
-      <button className="btn-primary" style={{ background: draft.primary, borderColor: draft.primary }}>Shop now →</button>
+      <h3>{draft.storeName || "Your store name"}</h3>
+      <p>{draft.tagline || "A polished storefront preview will appear here as you make your selections."}</p>
+      <button className="btn-primary" style={{ background: draft.primary, borderColor: draft.primary }}>Shop now</button>
     </div>
   );
 }
 
 function Generating({ go }: CommonProps) {
   const lines = ["ANALYSING BUSINESS DETAILS", "GENERATING STORE THEME CONFIGURATION", "CRAFTING HOMEPAGE LAYOUT", "WRITING PRODUCT DESCRIPTIONS", "FINALISING STOREFRONT CONTENT", "STORE READY FOR PREVIEW"];
+  const [visibleCount, setVisibleCount] = useState(0);
+
+  useEffect(() => {
+    setVisibleCount(0);
+    const interval = window.setInterval(() => {
+      setVisibleCount((current) => {
+        if (current >= lines.length) {
+          window.clearInterval(interval);
+          return current;
+        }
+
+        return current + 1;
+      });
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
   return (
     <main className="wizard-shell" style={{ display: "grid", placeItems: "center" }}>
       <div style={{ textAlign: "center" }}>
-        <div className="wireframe-box" style={{ width: 450, maxWidth: "80vw", margin: "0 auto 32px" }}>
-          <div className="orbit" /><span className="orbit-node one" /><span className="orbit-node two" /><span className="orbit-node three" />
-          <span style={{ position: "absolute", inset: "calc(50% - 8px)", width: 16, height: 16, background: "var(--color-mint)" }} />
+        <div className="wireframe-box generating-loader" style={{ width: 450, maxWidth: "80vw", margin: "0 auto 32px" }}>
+          <div className="orbit" />
+          <span className="orbit-node one" />
+          <span className="orbit-node two" />
+          <span className="orbit-node three" />
+          <span className="loader-core" />
         </div>
         <div style={{ display: "grid", gap: 12, textAlign: "left" }}>
-          {lines.map((line, index) => <span className="mono" style={{ fontSize: 11 }} key={line}>■ 00:{String(index * 2 + 1).padStart(2, "0")} {line}</span>)}
+          {lines.slice(0, visibleCount).map((line, index) => (
+            <span className="mono generating-line" style={{ fontSize: 11 }} key={line}>
+              {`[ ] 00:${String(index * 2 + 1).padStart(2, "0")} ${line}`}
+            </span>
+          ))}
         </div>
-        <button className="btn-primary" style={{ marginTop: 32 }} onClick={() => go("/onboarding/preview")}>Preview your store →</button>
+        <button className="btn-primary" disabled={visibleCount < lines.length} style={{ marginTop: 32 }} onClick={() => go("/onboarding/preview")}>Preview your store</button>
       </div>
     </main>
   );
@@ -778,15 +910,36 @@ function Generating({ go }: CommonProps) {
 
 function Preview({ state, update, go, notify }: CommonProps) {
   const products = state.store.products.filter((product) => !product.deleted);
+
+  async function attachPreviewAsset(kind: "logoUrl" | "heroImageUrl", file?: File | null) {
+    if (!file) {
+      return;
+    }
+
+    const assetUrl = await fileToDataUrl(file);
+    update((current) => ({
+      ...current,
+      draft: { ...current.draft, [kind]: assetUrl },
+      store: { ...current.store, [kind]: assetUrl }
+    }));
+  }
+
   return (
     <div className="preview-shell">
       <aside className="preview-sidebar">
         <StatusBadge>Preview mode</StatusBadge>
-        <p className="mono" style={{ fontSize: 11, marginTop: 16 }}>AI draft — not yet published</p>
+        <p className="mono" style={{ fontSize: 11, marginTop: 16 }}>AI draft - not yet published</p>
         <hr />
         <h3>Store info</h3>
-        <Field id="preview-name" label="Store name" value={state.store.name} onChange={(name) => update((current) => ({ ...current, store: { ...current.store, name } }))} />
-        <Area id="ai" label="AI refinement" rows={4} value="Make the homepage warmer and emphasize delivery speed." onChange={() => undefined} />
+        <Field id="preview-name" label="Store name" value={state.store.name} onChange={(name) => update((current) => ({ ...current, draft: { ...current.draft, storeName: name }, store: { ...current.store, name } }))} />
+        <Field id="preview-tagline" label="Store tagline" value={state.store.heroCopy} placeholder="Fast delivery for busy households across Lagos." onChange={(heroCopy) => update((current) => ({ ...current, draft: { ...current.draft, tagline: heroCopy }, store: { ...current.store, heroCopy } }))} />
+        <AssetUploadField id="preview-logo" label="Store logo upload" hint="Change or confirm the logo shown in storefront navigation." onFileSelect={(file) => void attachPreviewAsset("logoUrl", file)} />
+        <AssetUploadField id="preview-hero" label="Hero image upload" hint="Change or confirm the hero image shown behind the storefront headline." onFileSelect={(file) => void attachPreviewAsset("heroImageUrl", file)} />
+        <div className="row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+          {state.store.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${state.store.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
+          {state.store.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${state.store.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
+        </div>
+        <Area id="ai" label="AI refinement" rows={4} value="" placeholder="Ask Aeris to warm the homepage copy or change the hero direction." onChange={() => undefined} />
         <button className="btn-primary" style={{ width: "100%" }} onClick={() => notify("Proposed AI changes ready for review")}>Apply changes</button>
         <button className="btn-ghost" style={{ width: "100%", marginTop: 8 }} onClick={() => notify("Changes discarded")}>Discard</button>
       </aside>
@@ -794,23 +947,32 @@ function Preview({ state, update, go, notify }: CommonProps) {
         <span className="preview-badge status-badge"><span className="status-dot" />Preview draft</span>
         <StorefrontRenderer store={state.store} products={products} cart={state.cart} addToCart={() => undefined} preview />
         <div className="bottom-bar">
-          <button className="btn-ghost" onClick={() => go("/onboarding")}>← Back to editor</button>
-          <button className="btn-primary" onClick={() => go("/claim")}>Claim & publish →</button>
+          <button className="btn-ghost" onClick={() => go("/onboarding")}>Back to editor</button>
+          <button className="btn-primary" onClick={() => go("/claim")}>Claim and publish</button>
         </div>
       </main>
     </div>
   );
 }
 
-function Claim({ state, update, go }: CommonProps) {
-  const [email, setEmail] = useState(state.auth.email || "merchant@aeris.store");
+function Claim({ state, update, go, notify }: CommonProps) {
+  const [email, setEmail] = useState(state.draft.leadEmail || state.auth.email || "");
   const [password, setPassword] = useState(state.auth.password || "");
-  const [slug, setSlug] = useState(state.store.slug);
-  const available = isSlugAvailable(slug, state.store.slug);
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [slug, setSlug] = useState(state.store.slug || slugify(state.draft.storeName));
+  const slugState = slugFieldState(slug, state.store.slug);
+  const passwordsMatch = password.trim().length > 0 && password === confirmPassword;
+  const emailTaken = isEmailTaken(state, email) && email.trim().toLowerCase() !== (state.auth.email || "").trim().toLowerCase();
+
+  useEffect(() => {
+    setEmail(state.draft.leadEmail || state.auth.email || "");
+    setSlug(state.store.slug || slugify(state.draft.storeName));
+  }, [state.auth.email, state.draft.leadEmail, state.draft.storeName, state.store.slug]);
 
   function regenerateSlug() {
+    const base = slugify(state.draft.storeName || state.store.name || "aeris-store");
     const suffix = Math.random().toString(36).slice(2, 6);
-    setSlug(`${slugify(state.store.name)}-${suffix}`);
+    setSlug(`${base}-${suffix}`);
   }
 
   return (
@@ -820,26 +982,34 @@ function Claim({ state, update, go }: CommonProps) {
         <h2>Claim your store.</h2>
         <p>Create an account to own this draft and publish it to your Aeris subdomain.</p>
         <div className="field-stack">
-          <Field id="claim-email" label="Email address" value={email} onChange={setEmail} />
-          <Field id="claim-password" label="Choose a password" value={password} onChange={setPassword} />
+          <Field id="claim-email" label="Email address" type="email" value={email} placeholder="merchant@example.com" onChange={setEmail} className={!emailLooksValid(email) || emailTaken ? "field-error" : ""} />
+          <Field id="claim-password" label="Choose a password" type="password" value={password} placeholder="Create a secure password" onChange={setPassword} />
+          <Field id="claim-confirm-password" label="Confirm password" type="password" value={confirmPassword} placeholder="Re-enter your password" onChange={setConfirmPassword} className={!passwordsMatch && confirmPassword ? "field-error" : ""} />
           <div className="slug-row">
-            <Field id="claim-slug" label="Store slug" value={slug} onChange={(value) => setSlug(slugify(value))} />
+            <Field id="claim-slug" label="Store slug" value={slug} onChange={(value) => setSlug(slugify(value))} placeholder="bayode-foods" className={slugState.invalid ? "field-error" : ""} />
             <button className="btn-ghost" onClick={regenerateSlug} type="button">Regenerate</button>
           </div>
-          <span className="mono" style={{ fontSize: 11, color: available ? "var(--color-forest)" : "var(--color-coral)" }}>
-            Your store will live at: {slug || "your-slug"}.aeris.store · {available ? "✓ Available" : "✕ Already reserved or too short"}
+          <span className={`mono ${slugState.invalid ? "form-error" : ""}`} style={{ fontSize: 11 }}>
+            Your store will live at: {slug || "your-slug"}.aeris.store - {slugState.message}
           </span>
         </div>
-        <button className="btn-primary" disabled={!available || !password.trim()} style={{ width: "100%", height: 56, marginTop: 24 }} onClick={() => {
+        {emailTaken ? <span className="label form-error">X This email is already attached to another store</span> : null}
+        {!passwordsMatch && confirmPassword ? <span className="label form-error">X Passwords do not match</span> : null}
+        <button className="btn-primary" disabled={!slugState.available || !password.trim() || !passwordsMatch || !emailLooksValid(email) || emailTaken} style={{ width: "100%", height: 56, marginTop: 24 }} onClick={() => {
+          if (emailTaken) {
+            notify("That email is already attached to another merchant account");
+            return;
+          }
           update((current) => ({
             ...current,
-            store: { ...current.store, slug, ownerEmail: email, published: true },
-            auth: { email, password, loggedIn: true },
+            draft: { ...current.draft, leadEmail: email.trim().toLowerCase() },
+            store: { ...current.store, slug, ownerEmail: email.trim().toLowerCase(), published: true },
+            auth: { email: email.trim().toLowerCase(), password, loggedIn: true },
             activity: [`Published ${slug}.aeris.store`, ...current.activity]
           }));
           go("/store");
-        }}>Create account & publish</button>
-        <button className="btn-ghost" style={{ width: "100%", marginTop: 12 }} onClick={() => go("/login")}>Already have an account? Log in →</button>
+        }}>Create account and publish</button>
+        <button className="btn-ghost" style={{ width: "100%", marginTop: 12 }} onClick={() => go("/login")}>Already have an account? Log in</button>
       </div>
     </main>
   );
@@ -848,6 +1018,16 @@ function Claim({ state, update, go }: CommonProps) {
 function Login({ state, update, go, notify }: CommonProps) {
   const [email, setEmail] = useState(state.auth.email || state.store.ownerEmail || "");
   const [password, setPassword] = useState("");
+
+  function startCreateStore() {
+    const nextDraft = resetDraftState(emailLooksValid(email) ? email.trim().toLowerCase() : "");
+    update((current) => ({
+      ...current,
+      draft: nextDraft,
+      store: buildStore(nextDraft)
+    }));
+    go("/onboarding");
+  }
 
   function login() {
     if (!email.trim() || !password.trim()) {
@@ -873,22 +1053,21 @@ function Login({ state, update, go, notify }: CommonProps) {
       <div className="form-card corner-marked" style={{ width: "min(480px, calc(100% - 32px))" }}>
         <Corners />
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap" }}>
-          <button className="btn-ghost" onClick={() => go("/")}>← Back home</button>
-          {state.auth.loggedIn ? <button className="btn-ghost" onClick={() => go("/store")}>Go to dashboard →</button> : null}
+          <button className="btn-ghost" onClick={() => go("/")}>Back home</button>
+          {state.auth.loggedIn ? <button className="btn-ghost" onClick={() => go("/store")}>Go to dashboard</button> : null}
         </div>
         <h2>Log in.</h2>
         <p>Access your Aeris merchant dashboard to manage products, orders, payouts, and storefront updates.</p>
         <div className="field-stack">
-          <Field id="login-email" label="Email address" value={email} onChange={setEmail} />
-          <Field id="login-password" label="Password" value={password} onChange={setPassword} />
+          <Field id="login-email" label="Email address" type="email" value={email} placeholder="merchant@example.com" onChange={setEmail} />
+          <Field id="login-password" label="Password" type="password" value={password} placeholder="Enter your password" onChange={setPassword} />
         </div>
-        <button className="btn-primary" style={{ width: "100%", height: 56, marginTop: 24 }} onClick={login}>Log in →</button>
-        <button className="btn-ghost" style={{ width: "100%", marginTop: 12 }} onClick={() => go("/claim")}>Create an account →</button>
+        <button className="btn-primary" style={{ width: "100%", height: 56, marginTop: 24 }} onClick={login}>Log in</button>
+        <button className="btn-ghost" style={{ width: "100%", marginTop: 12 }} onClick={startCreateStore}>Create store</button>
       </div>
     </main>
   );
 }
-
 function Dashboard({ state, update, go, notify, section }: CommonProps & { section: "store" | "editor" | "products" | "orders" | "payouts" | "settings" }) {
   const visibleProducts = state.store.products.filter((product) => !product.deleted);
   const balance = availableBalance(state.orders, state.payouts);
@@ -911,7 +1090,7 @@ function Dashboard({ state, update, go, notify, section }: CommonProps & { secti
           {section === "products" && <ProductsManager state={state} update={update} notify={notify} products={visibleProducts} go={go} />}
           {section === "orders" && <OrdersManager state={state} update={update} />}
           {section === "payouts" && <PayoutsManager state={state} update={update} balance={balance} />}
-          {section === "settings" && <SettingsManager state={state} update={update} />}
+          {section === "settings" && <SettingsManager state={state} update={update} notify={notify} />}
         </main>
         <aside className="dashboard-sidebar">
           <div className="side-box">
@@ -1158,7 +1337,18 @@ function ChainOfThoughtCard({ statuses, running, ready, open, onToggle }: { stat
 
 function ProductsManager({ state, update, notify, products, go }: { state: State; update: CommonProps["update"]; notify: (m: string) => void; products: Product[]; go: (path: string) => void }) {
   function patchProduct(id: string, patch: Partial<Product>) {
-    update((current) => ({ ...current, store: { ...current.store, products: current.store.products.map((product) => product.id === id ? { ...product, ...patch, source: patch.name || patch.description || patch.price ? "merchant" : product.source } : product) } }));
+    update((current) => {
+      const nextSource: ProductSource | undefined = patch.name || patch.description || patch.price ? "merchant" : undefined;
+      const nextState = {
+        ...current,
+        store: {
+          ...current.store,
+          products: current.store.products.map((product) => product.id === id ? { ...product, ...patch, source: nextSource || product.source } : product)
+        }
+      };
+      persistState(nextState);
+      return nextState;
+    });
   }
   return (
     <>
@@ -1168,10 +1358,16 @@ function ProductsManager({ state, update, notify, products, go }: { state: State
           <div className="table-row" key={product.id}>
             <strong>{product.name}<br /><span className="label">{product.slug}</span></strong>
             <span>{money(product.price)}</span>
-            <span className={`chip ${product.source === "ai" ? "gold" : product.inStock ? "mint" : "coral"}`}>{product.source === "ai" ? "⚡ AI Draft" : product.inStock ? "In stock" : "Out of stock"}</span>
-            <button className="btn-ghost" onClick={() => patchProduct(product.id, { inStock: !product.inStock })}>{product.inStock ? "Mark out" : "Restock"}</button>
+            <span className={`chip ${product.source === "ai" ? "gold" : product.inStock ? "mint" : "coral"}`}>{product.source === "ai" ? "AI Draft" : product.inStock ? "In stock" : "Out of stock"}</span>
+            <button className="btn-ghost" onClick={() => {
+              patchProduct(product.id, { inStock: !product.inStock });
+              notify(product.inStock ? "Product marked out of stock" : "Product restocked");
+            }}>{product.inStock ? "Mark out" : "Restock"}</button>
             <button className="btn-ghost" onClick={() => go(`/products/${product.id}`)}>Edit</button>
-            <button className="btn-danger" onClick={() => patchProduct(product.id, { deleted: true, featured: false })}>Delete</button>
+            <button className="btn-danger" onClick={() => {
+              patchProduct(product.id, { deleted: true, featured: false });
+              notify("Product removed");
+            }}>Delete</button>
           </div>
         ))}
       </div>
@@ -1221,7 +1417,7 @@ function ProductEditorPage({ state, update, go, notify, mode }: CommonProps & { 
           description: description.trim(),
           imageUrl,
           inStock,
-          source: "merchant"
+          source: "merchant" as ProductSource
         } : product)
         : [
           ...current.store.products,
@@ -1258,9 +1454,9 @@ function ProductEditorPage({ state, update, go, notify, mode }: CommonProps & { 
           <button className="btn-ghost" onClick={() => go("/products")}>← Back to products</button>
           <h2 style={{ marginTop: 24 }}>{mode === "edit" ? "Edit product" : "Add product"}</h2>
           <div className="field-stack" style={{ marginTop: 24 }}>
-            <Field id="product-name" label="Product name" value={name} onChange={setName} />
-            <Field id="product-price" label="Price (₦)" value={price} onChange={setPrice} />
-            <Area id="product-description" label="Description" rows={6} value={description} onChange={setDescription} />
+            <Field id="product-name" label="Product name" value={name} placeholder="Smoked Jollof Party Tray" onChange={setName} />
+            <Field id="product-price" label="Price (NGN)" value={price} placeholder="18500" onChange={setPrice} />
+            <Area id="product-description" label="Description" rows={6} placeholder="Describe the product shoppers will receive." value={description} onChange={setDescription} />
             <AssetUploadField id="product-image" label="Product image upload" hint="Upload the product image shoppers will see on the storefront." onFileSelect={(file) => void uploadImage(file)} />
             <div className="row" style={{ alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap" }}>
               {imageUrl ? <div className="product-image-preview" style={{ backgroundImage: `url(${imageUrl})` }} /> : <div className="product-image-preview logo-preview-empty">IMAGE</div>}
@@ -1314,13 +1510,13 @@ function PayoutsManager({ state, update, balance }: { state: State; update: Comm
         const orders = structuredClone(state.orders);
         const allocation = allocatePayout(amount, orders);
         update((current) => ({ ...current, orders, payouts: [{ id: cryptoId("payout"), amount: amount - allocation.remaining, status: "requested", allocatedOrderRefs: allocation.refs, createdAt: new Date().toISOString() }, ...current.payouts] }));
-      }}>Request payout →</button></div>
+      }}>Request payout -{">"}</button></div>
       <div className="table" style={{ marginTop: 24 }}>{state.payouts.map((payout) => <div className="table-row" key={payout.id}><span>{payout.createdAt.slice(0, 10)}</span><strong>{money(payout.amount)}</strong><span>{state.draft.bankName}</span><span className="chip gold">{payout.status}</span><span>{payout.id}</span></div>)}</div>
     </>
   );
 }
 
-function SettingsManager({ state, update }: { state: State; update: CommonProps["update"] }) {
+function SettingsManager({ state, update, notify }: { state: State; update: CommonProps["update"]; notify: CommonProps["notify"] }) {
   const locked = state.store.published;
   const [storeName, setStoreName] = useState(state.store.name);
   const [tagline, setTagline] = useState(state.store.heroCopy);
@@ -1349,6 +1545,7 @@ function SettingsManager({ state, update }: { state: State; update: CommonProps[
 
   function saveSettings() {
     if (locked) {
+      notify("Unpublish the store before editing settings");
       return;
     }
 
@@ -1374,6 +1571,7 @@ function SettingsManager({ state, update }: { state: State; update: CommonProps[
       persistState(nextState);
       return nextState;
     });
+    notify("Store settings saved");
   }
 
   function clearAsset(kind: "logo" | "hero") {
@@ -1403,7 +1601,7 @@ function SettingsManager({ state, update }: { state: State; update: CommonProps[
             {heroImageUrl && !locked ? <button className="btn-danger" onClick={() => clearAsset("hero")}>Remove hero</button> : null}
           </div>
         </div>
-        <p className="mono" style={{ color: "var(--color-gold)", fontSize: 10 }}>⚠ Slug is locked after publish and cannot be changed.</p>
+        <p className="mono" style={{ color: "var(--color-gold)", fontSize: 10 }}>Warning: slug is locked after publish and cannot be changed.</p>
         <button className="btn-primary" disabled={locked} onClick={saveSettings}>Save changes</button>
         <button
           className="btn-ghost"
@@ -1442,7 +1640,9 @@ function PublicStore({ state, update, go, notify }: CommonProps) {
     update((current) => {
       const existing = current.cart.find((line) => line.productId === product.id);
       const cart = existing ? current.cart.map((line) => line.productId === product.id ? { ...line, quantity: line.quantity + 1 } : line) : [...current.cart, { productId: product.id, quantity: 1 }];
-      return { ...current, cart };
+      const nextState = { ...current, cart };
+      persistState(nextState);
+      return nextState;
     });
     notify("Added to cart");
   }
@@ -1487,12 +1687,12 @@ function StorefrontRenderer({ store, products, cart, addToCart, go, preview }: {
         <div className="store-hero-inner">
           <h1>{store.name.toUpperCase()}</h1>
           <p className="mono">{store.heroCopy}</p>
-          <button className="btn-primary" onClick={() => document.getElementById("store-products")?.scrollIntoView({ behavior: "smooth", block: "start" })}>Shop now →</button>
+          <button className="btn-primary" onClick={() => document.getElementById("store-products")?.scrollIntoView({ behavior: "smooth", block: "start" })}>Shop now -&gt;</button>
         </div>
       </section>
       {!searching && <section className="section-block"><div className="container"><span className="label">Featured</span><h2>Hand-picked for you.</h2><div className="store-product-grid">{(featured.length ? featured : products).map((product) => <StoreProductCard key={product.id} product={product} addToCart={addToCart} />)}</div></div></section>}
-      <section className="section-block" id="store-products"><div className="container"><span className="label">{searching ? "Search results" : "All products"}</span><h2>{searching ? `Results for “${searchQuery.trim()}”` : "The collection."}</h2>{filteredProducts.length === 0 ? <div className="empty-state"><p>No products match this search yet.</p></div> : <div className="store-product-grid">{filteredProducts.map((product) => <StoreProductCard key={`${product.id}-all`} product={product} addToCart={addToCart} />)}</div>}</div></section>
-      <footer className="section-block"><div className="container row" style={{ justifyContent: "space-between" }}><span>{store.name} · {store.city} · {store.category}</span><span className="label">Powered by Aeris</span></div></footer>
+      <section className="section-block" id="store-products"><div className="container"><span className="label">{searching ? "Search results" : "All products"}</span><h2>{searching ? `Results for "${searchQuery.trim()}"` : "The collection."}</h2>{filteredProducts.length === 0 ? <div className="empty-state"><p>No products match this search yet.</p></div> : <div className="store-product-grid">{filteredProducts.map((product) => <StoreProductCard key={`${product.id}-all`} product={product} addToCart={addToCart} />)}</div>}</div></section>
+      <footer className="section-block"><div className="container row" style={{ justifyContent: "space-between" }}><span>{store.name} / {store.city} / {store.category}</span><span className="label">Powered by Aeris</span></div></footer>
     </main>
   );
 }
@@ -1502,7 +1702,7 @@ function StoreProductCard({ product, addToCart }: { product: Product; addToCart:
     <article className="product-card">
       <div className="product-image" style={product.imageUrl ? { backgroundImage: `url(${product.imageUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}>{product.imageUrl ? "" : product.name}</div>
       <div className="product-body">
-        {product.source === "ai" && <span className="chip gold">⚡ AI Draft</span>}
+        {product.source === "ai" && <span className="chip gold">AI Draft</span>}
         {!product.inStock && <span className="chip coral">Out of stock</span>}
         <strong>{product.name}</strong>
         <p>{product.description}</p>
@@ -1520,9 +1720,9 @@ function CartPage({ state, go, update }: CommonProps) {
     <>
       <StoreUtilityNav store={state.store} cartCount={state.cart.reduce((sum, line) => sum + line.quantity, 0)} go={go} />
       <main className="container section-block page-with-store-nav">
-        <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>← Continue shopping</button>
+        <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>{"<-"} Continue shopping</button>
         <h2 style={{ marginTop: 32 }}>Your cart</h2>
-        {products.length === 0 ? <div className="empty-state"><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>Continue shopping →</button></div> : <CartContents state={state} go={go} update={update} totals={totals} />}
+        {products.length === 0 ? <div className="empty-state"><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>Continue shopping -&gt;</button></div> : <CartContents state={state} go={go} update={update} totals={totals} />}
     </main>
     </>
   );
@@ -1561,7 +1761,7 @@ function CartContents({ state, go, update, totals }: { state: State; go: (path: 
           </div>
         ))}
       </div>
-      <div className="form-card corner-marked"><Corners /><span className="label">Order summary</span><p>Subtotal: {money(totals.subtotal)}</p><p>Logistics: {money(totals.logisticsFee)}</p><h3>Total: {money(totals.total)}</h3><button className="btn-primary" onClick={() => go("/checkout")}>Proceed to checkout →</button></div>
+      <div className="form-card corner-marked"><Corners /><span className="label">Order summary</span><p>Subtotal: {money(totals.subtotal)}</p><p>Logistics: {money(totals.logisticsFee)}</p><h3>Total: {money(totals.total)}</h3><button className="btn-primary" onClick={() => go("/checkout")}>Proceed to checkout -&gt;</button></div>
     </div>
   );
 }
@@ -1573,7 +1773,7 @@ function CheckoutPage({ state, update, go, notify }: CommonProps) {
     <>
       <StoreUtilityNav store={state.store} cartCount={state.cart.reduce((sum, line) => sum + line.quantity, 0)} go={go} />
       <main className="container section-block two-column page-with-store-nav">
-        <div className="form-card corner-marked"><Corners /><button className="btn-ghost" onClick={() => go("/cart")}>← Back to cart</button><h2 style={{ marginTop: 24 }}>Checkout</h2><Field id="full-name" label="Full name" value={details.fullName} onChange={(fullName) => setDetails({ ...details, fullName })} /><Field id="phone" label="Phone number" value={details.phone} onChange={(phone) => setDetails({ ...details, phone })} /><Select id="delivery-city" label="Delivery city" value={details.city} onChange={(city) => setDetails({ ...details, city: city as SupportedCity })} options={[...SUPPORTED_CITIES]} /><Field id="address" label="Address line" value={details.address} onChange={(address) => setDetails({ ...details, address })} /><button className="btn-primary" style={{ width: "100%", height: 56, marginTop: 16 }} onClick={() => {
+        <div className="form-card corner-marked"><Corners /><button className="btn-ghost" onClick={() => go("/cart")}>{"<-"} Back to cart</button><h2 style={{ marginTop: 24 }}>Checkout</h2><Field id="full-name" label="Full name" value={details.fullName} onChange={(fullName) => setDetails({ ...details, fullName })} /><Field id="phone" label="Phone number" value={details.phone} onChange={(phone) => setDetails({ ...details, phone })} /><Select id="delivery-city" label="Delivery city" value={details.city} onChange={(city) => setDetails({ ...details, city: city as SupportedCity })} options={[...SUPPORTED_CITIES]} /><Field id="address" label="Address line" value={details.address} onChange={(address) => setDetails({ ...details, address })} /><button className="btn-primary" style={{ width: "100%", height: 56, marginTop: 16 }} onClick={() => {
         if (!isSupportedCity(details.city)) return;
         const items = state.cart.map((line) => {
           const product = state.store.products.find((candidate) => candidate.id === line.productId)!;
@@ -1581,9 +1781,9 @@ function CheckoutPage({ state, update, go, notify }: CommonProps) {
         });
         const order: Order = { id: cryptoId("order"), reference: `AERIS_${Date.now().toString(36).toUpperCase()}`, storeId: state.store.id, items, subtotal: totals.subtotal, logisticsFee: totals.logisticsFee, platformFee: totals.platformFee, merchantEarnings: totals.merchantEarnings, status: "paid", paymentState: "paid", delivery: details, createdAt: new Date().toISOString(), payoutAllocated: 0 };
         update((current) => ({ ...current, cart: [], orders: [order, ...current.orders], activity: [`New paid order ${order.reference}`, ...current.activity] }));
-        notify("■ New order paid through Kora");
+        notify("New order paid through Kora");
         go(`/order/${order.reference}?success=1`);
-      }}>Proceed to payment →</button></div>
+      }}>Proceed to payment -&gt;</button></div>
       <aside className="form-card"><span className="label">Order summary</span><p>Subtotal: {money(totals.subtotal)}</p><p>Delivery: {money(totals.logisticsFee)}</p><h3>Total: {money(totals.total)}</h3></aside>
     </main>
     </>
@@ -1599,7 +1799,7 @@ function OrderStatus({ state, go }: CommonProps) {
       <StoreUtilityNav store={state.store} cartCount={state.cart.reduce((sum, line) => sum + line.quantity, 0)} go={go} />
       <main className="container section-block page-with-store-nav">
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 32 }}>
-          <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>← Back to store</button>
+          <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>{'<-'} Back to store</button>
         </div>
         {order ? <><StatusBadge>Payment confirmed</StatusBadge><h2>Order status</h2><p className="mono">#{order.reference}</p><div className="form-card"><h3>{order.status.toUpperCase()}</h3><p>Delivery to {order.delivery.fullName}, {order.delivery.address}, {order.delivery.city}.</p></div></> : <div className="empty-state">Order not found.</div>}
       </main>
@@ -1610,7 +1810,7 @@ function OrderStatus({ state, go }: CommonProps) {
 function StoreUtilityNav({ store, cartCount, go }: { store: Store; cartCount: number; go: (path: string) => void }) {
   return (
     <nav className="store-nav utility-nav">
-      <button className="nav-link" onClick={() => go(`/s/${store.slug}`)}>← Storefront</button>
+      <button className="nav-link" onClick={() => go(`/s/${store.slug}`)}>{"<-"} Storefront</button>
       <strong style={{ fontFamily: "var(--font-display)", color: "var(--color-forest)" }}>{store.name}</strong>
       <button className="btn-ghost" onClick={() => go("/cart")}>Cart <span className="cart-pill">{cartCount}</span></button>
     </nav>

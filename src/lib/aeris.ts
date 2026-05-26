@@ -155,17 +155,40 @@ export function makeProduct(input: ProductInput, index: number, source: ProductS
 }
 
 export function generateAiProducts(category: string, count: number, startIndex: number): Product[] {
-  const templates = [
-    ["Signature Bundle", "A curated starter bundle designed to make the storefront feel complete."],
-    ["Weekend Pick", "A customer-friendly option with strong homepage appeal."],
-    ["Everyday Essential", "A reliable catalog staple for repeat purchases."]
+  const byCategory: Record<string, Array<[string, string, number]>> = {
+    "Food & Groceries": [
+      ["Weekend Soup Pack", "A ready-to-order pantry and soup ingredient bundle for fast household cooking.", 14500],
+      ["Fresh Market Basket", "An everyday essentials mix curated for repeat home deliveries.", 12000],
+      ["Family Rice Combo", "A strong homepage product for families stocking up for the week.", 18500]
+    ],
+    Fashion: [
+      ["Signature Ankara Set", "A hero-ready listing with premium visual appeal for fashion-first storefronts.", 22000],
+      ["Weekend Casual Drop", "A clean everyday style option designed for repeat purchases.", 16500],
+      ["Statement Look Bundle", "A polished lead product that helps the storefront feel immediately merchandised.", 28000]
+    ],
+    Electronics: [
+      ["Starter Gadget Pack", "A practical bundle positioned for high-intent electronics shoppers.", 35000],
+      ["Home Setup Essential", "A dependable product listing that makes the catalog feel complete.", 42000],
+      ["Portable Power Pick", "A conversion-friendly product designed to strengthen the hero section.", 18000]
+    ],
+    "Beauty & Health": [
+      ["Glow Care Kit", "A premium self-care bundle created to anchor a beauty storefront.", 19500],
+      ["Daily Skin Routine", "An approachable repeat-purchase product for returning customers.", 14000],
+      ["Wellness Essentials", "A polished wellness listing that rounds out the starter catalog.", 21000]
+    ]
+  };
+
+  const templates = byCategory[category] || [
+    ["Signature Bundle", "A curated starter bundle designed to make the storefront feel complete.", 15000],
+    ["Weekend Pick", "A customer-friendly option with strong homepage appeal.", 13000],
+    ["Everyday Essential", "A reliable catalog staple for repeat purchases.", 11000]
   ];
 
-  return templates.slice(0, count).map(([name, description], offset) =>
+  return templates.slice(0, count).map(([name, description, price], offset) =>
     makeProduct(
       {
-        name: `${category || "Aeris"} ${name}`,
-        price: 12000 + (startIndex + offset) * 2500,
+        name,
+        price: price + offset * 1000,
         description
       },
       startIndex + offset,
