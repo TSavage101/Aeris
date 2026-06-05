@@ -964,6 +964,12 @@ textarea.field-input {
   gap: var(--space-3);
 }
 
+.store-brand-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .store-logo,
 .logo-preview {
   width: 40px;
@@ -1045,6 +1051,7 @@ textarea.field-input {
 .product-card {
   border: var(--border-hair);
   background: var(--color-paper);
+  overflow: hidden;
 }
 
 .product-image {
@@ -1069,6 +1076,21 @@ textarea.field-input {
   display: grid;
   gap: var(--space-3);
   padding: var(--space-4);
+}
+
+.editor-summary-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 var(--space-4);
+}
+
+.editor-summary-list .editor-note::before {
+  content: "■";
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--color-forest);
+  font-family: var(--font-mono);
+  font-size: var(--text-10);
 }
 
 .cart-pill {
@@ -1179,6 +1201,38 @@ textarea.field-input {
   border: var(--border-hair);
   background: var(--color-white);
   padding: 20px 24px;
+}
+
+.payment-modal-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  display: grid;
+  place-items: center;
+}
+
+.payment-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(26, 60, 43, 0.15);
+  backdrop-filter: blur(4px);
+}
+
+.payment-modal {
+  position: relative;
+  width: min(640px, calc(100vw - 32px));
+  border: var(--border-hair);
+  background: var(--color-paper);
+  padding: var(--space-6);
+}
+
+.payment-iframe {
+  width: 100%;
+  height: 640px;
+  border: var(--border-hair);
+  background: var(--color-white);
+  margin-top: var(--space-4);
 }
 
 .generating-loader .orbit {
@@ -1532,6 +1586,11 @@ textarea.field-input {
   .hamburger {
     display: block;
   }
+
+  .store-brand-center {
+    position: static;
+    transform: none;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1567,5 +1626,14 @@ textarea.field-input {
 
   .merchant-nav {
     padding: 0 var(--space-3);
+  }
+
+  .payment-modal {
+    width: calc(100vw - 24px);
+    padding: var(--space-4);
+  }
+
+  .payment-iframe {
+    height: 520px;
   }
 }

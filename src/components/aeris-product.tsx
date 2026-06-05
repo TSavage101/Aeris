@@ -42,6 +42,30 @@ type DraftProductRow = {
   imageUrl: string;
 };
 
+type AiTraceStep = {
+  title: string;
+  summary: string;
+};
+
+type StorePatch = {
+  heroTitle?: string | null;
+  heroCopy?: string | null;
+  logoUrl?: string | null;
+  heroImageUrl?: string | null;
+  theme?: Partial<Store["theme"]>;
+};
+
+type AiStoreEditResponse = {
+  patch: StorePatch;
+  summary: string[];
+  steps: AiTraceStep[];
+};
+
+type KoraCheckoutSession = {
+  checkoutUrl: string;
+  reference: string;
+};
+
 type State = {
   draft: Draft;
   store: Store;
@@ -96,7 +120,9 @@ function buildStore(draft: Draft): Store {
       primary: draft.primary,
       secondary: "#FF8C69",
       accent: "#9EFFBF",
-      template: "provisions"
+      template: "provisions",
+      navAlignment: "left",
+      productRadius: 0
     },
     heroTitle: `${storeName.toUpperCase()} DELIVERED FAST.`,
     heroCopy: draft.tagline.trim() || `Discover curated ${category.toLowerCase()} offers built for shoppers in ${city}.`,
@@ -299,6 +325,101 @@ function isEmailTaken(state: State, email: string) {
 
 function persistState(nextState: State) {
   localStorage.setItem("aeris-product-state", JSON.stringify(nextState));
+}
+
+function openStorefrontWindow(slug: string) {
+  window.open(`/s/${slug}`, "_blank", "noopener,noreferrer");
+}
+
+function mergeStorePatch(store: Store, patch: StorePatch) {
+  const nextTheme = patch.theme
+    ? {
+        ...store.theme,
+        ...Object.fromEntries(Object.entries(patch.theme).filter(([, value]) => value !== null && value !== undefined))
+      }
+    : store.theme;
+
+  return {
+    ...store,
+    heroTitle: patch.heroTitle ?? store.heroTitle,
+    heroCopy: patch.heroCopy ?? store.heroCopy,
+    logoUrl: patch.logoUrl ?? store.logoUrl,
+    heroImageUrl: patch.heroImageUrl ?? store.heroImageUrl,
+    theme: nextTheme
+  };
+}
+
+async function requestStoreEdit(store: Store, prompt: string): Promise<AiStoreEditResponse> {
+  const response = await fetch("/api/openai/store-edit", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ store, prompt })
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(payload?.error || "AI edit request failed");
+  }
+
+  return response.json() as Promise<AiStoreEditResponse>;
+}
+
+async function createKoraCheckoutSession(input: {
+  reference: string;
+  amount: number;
+  customer: { name: string; email: string };
+  metadata: Record<string, string>;
+}) {
+  const response = await fetch("/api/kora/checkout", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(payload?.error || "Unable to initialize Kora checkout");
+  }
+
+  return response.json() as Promise<KoraCheckoutSession>;
+}
+
+async function verifyKoraCharge(reference: string) {
+  const response = await fetch(`/api/kora/verify/${reference}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(payload?.error || "Unable to verify payment");
+  }
+
+  return response.json() as Promise<{ status: string; rawStatus?: string; amount?: number; currency?: string }>;
+}
+
+async function requestKoraPayout(input: {
+  reference: string;
+  amount: number;
+  accountNumber: string;
+  bankName: string;
+  accountName: string;
+  customerEmail: string;
+}) {
+  const response = await fetch("/api/kora/payout", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(payload?.error || "Unable to request payout");
+  }
+
+  return response.json() as Promise<{ reference: string; status: "processing" | "paid" | "failed"; message?: string }>;
 }
 
 function ChainBrainIcon() {
@@ -1180,14 +1301,14 @@ function Dashboard({ state, update, go, notify, section }: CommonProps & { secti
           {section === "store" && <StoreOverview state={state} go={go} balance={balance} />}
           {section === "products" && <ProductsManager state={state} update={update} notify={notify} products={visibleProducts} go={go} />}
           {section === "orders" && <OrdersManager state={state} update={update} />}
-          {section === "payouts" && <PayoutsManager state={state} update={update} balance={balance} />}
+          {section === "payouts" && <PayoutsManager state={state} update={update} balance={balance} notify={notify} />}
           {section === "settings" && <SettingsManager state={state} update={update} notify={notify} />}
         </main>
         <aside className="dashboard-sidebar">
           <div className="side-box">
             <span className="label">Live store URL</span>
             <p className="mono" style={{ fontSize: 11, color: "var(--color-forest)" }}>{state.store.slug}.aeris.store</p>
-            <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>View live store ↗</button>
+            <button className="btn-ghost" onClick={() => openStorefrontWindow(state.store.slug)}>View live store ↗</button>
           </div>
           <div className="side-box" style={{ marginTop: 16 }}>
             <span className="label">Merchant balance</span>
@@ -1226,7 +1347,7 @@ function StoreOverview({ state, go, balance }: { state: State; go: (path: string
       </div>
       <h2>Store overview</h2>
       <p>Your storefront {state.store.published ? <>is published at <strong>{state.store.slug}.aeris.store</strong></> : "is currently in draft mode"}. Manage products, orders, payouts, and settings from the navigation above.</p>
-      <div className="row"><button className="btn-primary" onClick={() => go("/products")}>Add product +</button><button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>View storefront ↗</button></div>
+      <div className="row"><button className="btn-primary" onClick={() => go("/products")}>Add product +</button><button className="btn-ghost" onClick={() => openStorefrontWindow(state.store.slug)}>View storefront ↗</button></div>
       <div className="two-column" style={{ marginTop: 32 }}>
         <div className="form-card corner-marked">
           <Corners />
@@ -1264,22 +1385,6 @@ function StoreOverview({ state, go, balance }: { state: State; go: (path: string
 
 type ThoughtStepStatus = "pending" | "active" | "completed" | "error";
 
-function buildAiPreviewStore(store: Store, prompt: string): Store {
-  const lowerPrompt = prompt.toLowerCase();
-  const wantsHeroArt = lowerPrompt.includes("hero") || lowerPrompt.includes("background") || lowerPrompt.includes("image");
-  const wantsPremium = lowerPrompt.includes("premium") || lowerPrompt.includes("luxury") || lowerPrompt.includes("elevated");
-  const wantsFresh = lowerPrompt.includes("fresh") || lowerPrompt.includes("clean");
-
-  return {
-    ...store,
-    heroTitle: wantsPremium ? `${store.name.toUpperCase()} CURATED FOR MODERN HOMES.` : `${store.name.toUpperCase()} REIMAGINED FOR ${store.city.toUpperCase()}.`,
-    heroCopy: wantsFresh
-      ? "Cleaner copy, sharper hierarchy, and a calmer storefront rhythm for returning shoppers."
-      : `AI draft update: ${prompt}`,
-    heroImageUrl: wantsHeroArt ? `https://images.aeris.store/generated/${slugify(store.name)}-${Date.now().toString(36)}.jpg` : store.heroImageUrl
-  };
-}
-
 function StoreEditorPage({ state, update, go, notify }: CommonProps) {
   const [prompt, setPrompt] = useState("Refresh the hero copy and make the storefront feel more premium.");
   const [previewStore, setPreviewStore] = useState<Store>(state.store);
@@ -1287,27 +1392,64 @@ function StoreEditorPage({ state, update, go, notify }: CommonProps) {
   const [isReady, setIsReady] = useState(false);
   const [traceOpen, setTraceOpen] = useState(true);
   const [stepStatuses, setStepStatuses] = useState<ThoughtStepStatus[]>(["pending", "pending", "pending", "pending"]);
+  const [traceSteps, setTraceSteps] = useState<AiTraceStep[]>([
+    { title: "Sending store context to Aeris AI", summary: "Preparing the current storefront draft, theme, and prompt for review." },
+    { title: "Waiting for model response", summary: "OpenAI is preparing a structured storefront patch for the draft store." },
+    { title: "Checking safe design controls", summary: "Limiting the response to supported storefront settings so the preview stays stable." },
+    { title: "Preparing preview-ready draft", summary: "The resulting patch will be staged for review before anything is applied live." }
+  ]);
+  const [aiSummary, setAiSummary] = useState<string[]>([]);
 
   useEffect(() => {
     setPreviewStore(state.store);
   }, [state.store]);
 
-  function runAiDraft() {
-    const nextPreview = buildAiPreviewStore(state.store, prompt);
-    setPreviewStore(nextPreview);
+  async function runAiDraft() {
     setIsRunning(true);
     setIsReady(false);
     setTraceOpen(true);
+    setAiSummary([]);
     setStepStatuses(["active", "pending", "pending", "pending"]);
+    setTraceSteps([
+      { title: "Sending store context to Aeris AI", summary: "Preparing the current storefront draft, theme, and prompt for review." },
+      { title: "Waiting for model response", summary: "OpenAI is preparing a structured storefront patch for the draft store." },
+      { title: "Checking safe design controls", summary: "Limiting the response to supported storefront settings so the preview stays stable." },
+      { title: "Preparing preview-ready draft", summary: "The resulting patch will be staged for review before anything is applied live." }
+    ]);
 
-    window.setTimeout(() => setStepStatuses(["completed", "active", "pending", "pending"]), 900);
-    window.setTimeout(() => setStepStatuses(["completed", "completed", "active", "pending"]), 1800);
-    window.setTimeout(() => setStepStatuses(["completed", "completed", "completed", "active"]), 2700);
-    window.setTimeout(() => {
-      setStepStatuses(["completed", "completed", "completed", "completed"]);
+    try {
+      const result = await requestStoreEdit(state.store, prompt);
+      const steps = (result.steps.length ? result.steps : traceSteps).slice(0, 4);
+      const nextPreview = mergeStorePatch(state.store, result.patch);
+
+      setTraceSteps(steps);
+      setPreviewStore(nextPreview);
+      setAiSummary(result.summary);
+
+      for (let index = 0; index < steps.length; index += 1) {
+        setStepStatuses(
+          steps.map((_, stepIndex) => {
+            if (stepIndex < index) {
+              return "completed";
+            }
+            if (stepIndex === index) {
+              return "active";
+            }
+            return "pending";
+          })
+        );
+        await new Promise((resolve) => window.setTimeout(resolve, 650));
+      }
+
+      setStepStatuses(steps.map(() => "completed"));
       setIsRunning(false);
       setIsReady(true);
-    }, 3600);
+    } catch (error) {
+      setStepStatuses((current) => current.map((status, index) => (index === 0 && status === "active" ? "error" : status)));
+      setIsRunning(false);
+      setIsReady(false);
+      notify(error instanceof Error ? error.message : "Unable to generate AI draft changes");
+    }
   }
 
   function applyPreview() {
@@ -1356,17 +1498,22 @@ function StoreEditorPage({ state, update, go, notify }: CommonProps) {
           <button className="btn-primary" disabled={isRunning || !prompt.trim()} onClick={runAiDraft}>Generate draft changes</button>
           <button className="btn-ghost" onClick={() => go("/settings")}>Edit brand assets</button>
         </div>
-        {(isRunning || isReady) && <ChainOfThoughtCard statuses={stepStatuses} running={isRunning} ready={isReady} open={traceOpen} onToggle={() => setTraceOpen((current) => !current)} />}
+        {(isRunning || isReady) && <ChainOfThoughtCard steps={traceSteps} statuses={stepStatuses} running={isRunning} ready={isReady} open={traceOpen} onToggle={() => setTraceOpen((current) => !current)} />}
         {isReady && (
           <div className="form-card" style={{ marginTop: 24, padding: 24 }}>
             <span className="label">Proposed changes</span>
-            <p className="editor-note">Hero messaging is tightened, storefront voice is more premium, and hero art is refreshed when your prompt asks for it.</p>
+            <div className="editor-summary-list">
+              {aiSummary.map((item) => (
+                <p className="editor-note" key={item}>{item}</p>
+              ))}
+            </div>
             <div className="row" style={{ flexWrap: "wrap" }}>
               <button className="btn-primary" onClick={applyPreview}>Apply draft to store</button>
               <button className="btn-ghost" onClick={() => {
                 setPreviewStore(state.store);
                 setIsReady(false);
                 setTraceOpen(true);
+                setAiSummary([]);
                 setStepStatuses(["pending", "pending", "pending", "pending"]);
               }}>Discard</button>
             </div>
@@ -1381,21 +1528,7 @@ function StoreEditorPage({ state, update, go, notify }: CommonProps) {
   );
 }
 
-function ChainOfThoughtCard({ statuses, running, ready, open, onToggle }: { statuses: ThoughtStepStatus[]; running: boolean; ready: boolean; open: boolean; onToggle: () => void }) {
-  const steps = [
-    "Reading your storefront prompt",
-    "Rewriting hero voice and positioning",
-    "Adjusting storefront presentation",
-    "Preparing preview-ready draft"
-  ];
-
-  const summaries = [
-    "Understanding the merchant request and locking onto the right store context.",
-    "Reworking headline language, hierarchy, and brand positioning for the storefront.",
-    "Applying the copy direction to the hero and storefront presentation choices.",
-    "Preparing a preview-safe draft the merchant can inspect before applying."
-  ];
-
+function ChainOfThoughtCard({ steps, statuses, running, ready, open, onToggle }: { steps: AiTraceStep[]; statuses: ThoughtStepStatus[]; running: boolean; ready: boolean; open: boolean; onToggle: () => void }) {
   return (
     <div className="chain-card">
       <button className={`chain-trigger ${running ? "active" : ""}`} type="button" onClick={onToggle}>
@@ -1406,15 +1539,15 @@ function ChainOfThoughtCard({ statuses, running, ready, open, onToggle }: { stat
         <ChainChevronIcon open={open} />
       </button>
       {open && <div className="chain-content">
-        {steps.map((label, index) => (
-          <div className="chain-step" data-status={statuses[index]} key={label}>
+        {steps.map((step, index) => (
+          <div className="chain-step" data-status={statuses[index]} key={`${step.title}-${index}`}>
             <div className="chain-step-title">
               <span className="chain-step-icon"><StepIcon status={statuses[index]} /></span>
-              <span>{label}</span>
+              <span>{step.title}</span>
             </div>
             <div className="chain-step-copy">
-              {statuses[index] === "completed" && summaries[index]}
-              {statuses[index] === "active" && summaries[index]}
+              {statuses[index] === "completed" && step.summary}
+              {statuses[index] === "active" && step.summary}
               {statuses[index] === "pending" && "Queued and waiting for the previous AI step to complete."}
               {statuses[index] === "error" && "This step needs attention before the draft can continue."}
             </div>
@@ -1592,16 +1725,92 @@ function OrdersManager({ state, update }: { state: State; update: CommonProps["u
   );
 }
 
-function PayoutsManager({ state, update, balance }: { state: State; update: CommonProps["update"]; balance: number }) {
+function PayoutsManager({ state, update, balance, notify }: { state: State; update: CommonProps["update"]; balance: number; notify: CommonProps["notify"] }) {
+  const [amount, setAmount] = useState(balance > 0 ? balance.toFixed(2) : "");
+  const [requesting, setRequesting] = useState(false);
+
+  useEffect(() => {
+    if (!amount) {
+      setAmount(balance > 0 ? balance.toFixed(2) : "");
+    }
+  }, [amount, balance]);
+
+  async function submitPayout() {
+    const requestedAmount = Number.parseFloat(amount);
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+      notify("Enter a valid payout amount");
+      return;
+    }
+
+    if (requestedAmount > balance) {
+      notify("Amount exceeds available balance");
+      return;
+    }
+
+    setRequesting(true);
+
+    try {
+      const response = await requestKoraPayout({
+        reference: cryptoId("payout").toUpperCase(),
+        amount: requestedAmount,
+        accountNumber: state.draft.accountNumber,
+        bankName: state.draft.bankName,
+        accountName: state.draft.accountName,
+        customerEmail: state.store.ownerEmail || state.auth.email
+      });
+
+      const orders = structuredClone(state.orders);
+      const allocation = allocatePayout(requestedAmount, orders);
+
+      update((current) => {
+        const nextState = {
+          ...current,
+          orders,
+          payouts: [
+            {
+              id: cryptoId("payout"),
+              amount: requestedAmount - allocation.remaining,
+              status: response.status,
+              koraReference: response.reference,
+              allocatedOrderRefs: allocation.refs,
+              createdAt: new Date().toISOString()
+            },
+            ...current.payouts
+          ],
+          activity: [`Requested payout ${response.reference}`, ...current.activity]
+        };
+        persistState(nextState);
+        return nextState;
+      });
+
+      setAmount("");
+      notify(response.message || "Payout request sent to Kora");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Unable to request payout");
+    } finally {
+      setRequesting(false);
+    }
+  }
+
   return (
     <>
       <div className="row" style={{ justifyContent: "space-between" }}><h2>Payouts</h2><strong className="stat-number" style={{ fontSize: 24 }}>{money(balance)}</strong></div>
-      <div className="form-card corner-marked" style={{ maxWidth: 480 }}><Corners /><span className="label">Payout amount</span><p>Max available: {money(balance)}</p><button className="btn-primary" disabled={balance <= 0} onClick={() => {
-        const amount = Math.floor(balance * 0.75);
-        const orders = structuredClone(state.orders);
-        const allocation = allocatePayout(amount, orders);
-        update((current) => ({ ...current, orders, payouts: [{ id: cryptoId("payout"), amount: amount - allocation.remaining, status: "requested", allocatedOrderRefs: allocation.refs, createdAt: new Date().toISOString() }, ...current.payouts] }));
-      }}>Request payout -{">"}</button></div>
+      <div className="form-card corner-marked" style={{ maxWidth: 480 }}>
+        <Corners />
+        <Field
+          id="payout-amount"
+          label="Payout amount"
+          value={amount}
+          inputMode="decimal"
+          onBlur={() => setAmount(normalizePriceInput(amount))}
+          onChange={(value) => setAmount(sanitizePriceInput(value))}
+          placeholder="0.00"
+        />
+        <p>Max available: {money(balance)}</p>
+        <button className="btn-primary" disabled={balance <= 0 || requesting} onClick={() => void submitPayout()}>
+          {requesting ? "Requesting..." : "Request payout ->"}
+        </button>
+      </div>
       <div className="table" style={{ marginTop: 24 }}>{state.payouts.map((payout) => <div className="table-row" key={payout.id}><span>{payout.createdAt.slice(0, 10)}</span><strong>{money(payout.amount)}</strong><span>{state.draft.bankName}</span><span className="chip gold">{payout.status}</span><span>{payout.id}</span></div>)}</div>
     </>
   );
@@ -1763,9 +1972,9 @@ function StorefrontRenderer({ store, products, cart, addToCart, go, preview }: {
     return <main className="storefront-page store-hero"><div><h2>{store.name}</h2><StatusBadge>Temporarily unavailable</StatusBadge><p>This store is currently unavailable. Please check back soon.</p><span className="label">Powered by Aeris</span></div></main>;
   }
   return (
-    <main className="storefront-page" style={{ "--store-primary": store.theme.primary } as CSSProperties}>
+    <main className="storefront-page" style={{ "--store-primary": store.theme.primary, "--store-product-radius": `${store.theme.productRadius}px` } as CSSProperties}>
       <nav className="store-nav">
-        <div className="store-brand">
+        <div className={`store-brand ${store.theme.navAlignment === "center" ? "store-brand-center" : ""}`}>
           {store.logoUrl ? <div className="store-logo" style={{ backgroundImage: `url(${store.logoUrl})` }} /> : null}
           <strong style={{ fontFamily: "var(--font-display)", color: "var(--color-forest)" }}>{store.name}</strong>
         </div>
@@ -1790,7 +1999,7 @@ function StorefrontRenderer({ store, products, cart, addToCart, go, preview }: {
 
 function StoreProductCard({ product, addToCart }: { product: Product; addToCart: (product: Product) => void }) {
   return (
-    <article className="product-card">
+    <article className="product-card" style={{ borderRadius: "var(--store-product-radius, 0px)" }}>
       <div className="product-image" style={product.imageUrl ? { backgroundImage: `url(${product.imageUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}>{product.imageUrl ? "" : product.name}</div>
       <div className="product-body">
         {product.source === "ai" && <span className="chip gold">AI Draft</span>}
@@ -1858,25 +2067,186 @@ function CartContents({ state, go, update, totals }: { state: State; go: (path: 
 }
 
 function CheckoutPage({ state, update, go, notify }: CommonProps) {
-  const [details, setDetails] = useState<CheckoutDetails>({ fullName: "Ada Okonkwo", phone: "08012345678", address: "14 Admiralty Way", landmark: "Near pharmacy", city: state.store.city });
+  const [details, setDetails] = useState<CheckoutDetails>({ fullName: "Ada Okonkwo", phone: "08012345678", email: "", address: "14 Admiralty Way", landmark: "Near pharmacy", city: state.store.city });
+  const [checkoutSession, setCheckoutSession] = useState<KoraCheckoutSession | null>(null);
+  const [initializing, setInitializing] = useState(false);
+  const [paymentStatus, setPaymentStatus] = useState("Initializing secure checkout...");
   const totals = calculateCheckout(state.store.products, state.cart, details.city);
+
+  useEffect(() => {
+    if (!checkoutSession) {
+      return;
+    }
+
+    let cancelled = false;
+    const session = checkoutSession;
+
+    async function poll() {
+      try {
+        const verification = await verifyKoraCharge(session.reference);
+        if (cancelled) {
+          return;
+        }
+
+        if (verification.status === "paid") {
+          const items = state.cart.map((line) => {
+            const product = state.store.products.find((candidate) => candidate.id === line.productId)!;
+            return { productId: product.id, name: product.name, quantity: line.quantity, unitPrice: product.price };
+          });
+
+          const order: Order = {
+            id: cryptoId("order"),
+            reference: `AERIS_${Date.now().toString(36).toUpperCase()}`,
+            storeId: state.store.id,
+            koraReference: session.reference,
+            items,
+            subtotal: totals.subtotal,
+            logisticsFee: totals.logisticsFee,
+            platformFee: totals.platformFee,
+            merchantEarnings: totals.merchantEarnings,
+            status: "paid",
+            paymentState: "paid",
+            delivery: details,
+            createdAt: new Date().toISOString(),
+            payoutAllocated: 0
+          };
+
+          update((current) => {
+            const nextState = {
+              ...current,
+              cart: [],
+              orders: [order, ...current.orders],
+              activity: [`New paid order ${order.reference}`, ...current.activity]
+            };
+            persistState(nextState);
+            return nextState;
+          });
+
+          setCheckoutSession(null);
+          setInitializing(false);
+          notify("New order paid through Kora");
+          go(`/order/${order.reference}?success=1`);
+          return;
+        }
+
+        if (verification.status === "failed") {
+          setCheckoutSession(null);
+          setInitializing(false);
+          setPaymentStatus("Payment failed. Please try again.");
+          notify("Kora reported a failed payment");
+          return;
+        }
+
+        setPaymentStatus("Waiting for Kora to confirm the transaction...");
+      } catch {
+        if (!cancelled) {
+          setPaymentStatus("Still waiting for Kora verification...");
+        }
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 5000);
+
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [checkoutSession, details, go, notify, state.cart, state.store, totals, update]);
+
+  async function beginCheckout() {
+    if (!isSupportedCity(details.city)) {
+      notify("Checkout is only available in Lagos and Abuja");
+      return;
+    }
+
+    if (!details.fullName.trim() || !details.phone.trim() || !details.address.trim()) {
+      notify("Complete the delivery details before continuing");
+      return;
+    }
+
+    if (state.cart.length === 0) {
+      notify("Add products to cart before checking out");
+      return;
+    }
+
+    setInitializing(true);
+    setPaymentStatus("Initializing secure checkout...");
+
+    try {
+      const reference = `AERISPAY_${Date.now().toString(36).toUpperCase()}`;
+      const session = await createKoraCheckoutSession({
+        reference,
+        amount: totals.total,
+        customer: {
+          name: details.fullName,
+          email: details.email?.trim() || `${state.store.slug}+checkout@aeris.store`
+        },
+        metadata: {
+          storeSlug: state.store.slug,
+          city: details.city
+        }
+      });
+
+      setCheckoutSession(session);
+      setPaymentStatus("Kora checkout is ready inside the store.");
+    } catch (error) {
+      setInitializing(false);
+      notify(error instanceof Error ? error.message : "Unable to initialize Kora checkout");
+    }
+  }
+
   return (
     <>
       <StoreUtilityNav store={state.store} cartCount={state.cart.reduce((sum, line) => sum + line.quantity, 0)} go={go} />
       <main className="container section-block two-column page-with-store-nav">
-        <div className="form-card corner-marked"><Corners /><button className="btn-ghost" onClick={() => go("/cart")}>{"<-"} Back to cart</button><h2 style={{ marginTop: 24 }}>Checkout</h2><Field id="full-name" label="Full name" value={details.fullName} onChange={(fullName) => setDetails({ ...details, fullName })} /><Field id="phone" label="Phone number" value={details.phone} onChange={(phone) => setDetails({ ...details, phone })} /><Select id="delivery-city" label="Delivery city" value={details.city} onChange={(city) => setDetails({ ...details, city: city as SupportedCity })} options={[...SUPPORTED_CITIES]} /><Field id="address" label="Address line" value={details.address} onChange={(address) => setDetails({ ...details, address })} /><button className="btn-primary" style={{ width: "100%", height: 56, marginTop: 16 }} onClick={() => {
-        if (!isSupportedCity(details.city)) return;
-        const items = state.cart.map((line) => {
-          const product = state.store.products.find((candidate) => candidate.id === line.productId)!;
-          return { productId: product.id, name: product.name, quantity: line.quantity, unitPrice: product.price };
-        });
-        const order: Order = { id: cryptoId("order"), reference: `AERIS_${Date.now().toString(36).toUpperCase()}`, storeId: state.store.id, items, subtotal: totals.subtotal, logisticsFee: totals.logisticsFee, platformFee: totals.platformFee, merchantEarnings: totals.merchantEarnings, status: "paid", paymentState: "paid", delivery: details, createdAt: new Date().toISOString(), payoutAllocated: 0 };
-        update((current) => ({ ...current, cart: [], orders: [order, ...current.orders], activity: [`New paid order ${order.reference}`, ...current.activity] }));
-        notify("New order paid through Kora");
-        go(`/order/${order.reference}?success=1`);
-      }}>Proceed to payment -&gt;</button></div>
-      <aside className="form-card"><span className="label">Order summary</span><p>Subtotal: {money(totals.subtotal)}</p><p>Delivery: {money(totals.logisticsFee)}</p><h3>Total: {money(totals.total)}</h3></aside>
-    </main>
+        <div className="form-card corner-marked">
+          <Corners />
+          <button className="btn-ghost" onClick={() => go("/cart")}>{"<-"} Back to cart</button>
+          <h2 style={{ marginTop: 24 }}>Checkout</h2>
+          <Field id="full-name" label="Full name" value={details.fullName} onChange={(fullName) => setDetails({ ...details, fullName })} />
+          <Field id="phone" label="Phone number" value={details.phone} onChange={(phone) => setDetails({ ...details, phone })} />
+          <Field id="checkout-email" label="Email address" type="email" value={details.email || ""} placeholder="Optional - for payment receipts" onChange={(email) => setDetails({ ...details, email })} />
+          <Select id="delivery-city" label="Delivery city" value={details.city} onChange={(city) => setDetails({ ...details, city: city as SupportedCity })} options={[...SUPPORTED_CITIES]} />
+          <Field id="address" label="Address line" value={details.address} onChange={(address) => setDetails({ ...details, address })} />
+          <Field id="landmark" label="Landmark" value={details.landmark || ""} placeholder="Nearest landmark" onChange={(landmark) => setDetails({ ...details, landmark })} />
+          <button className="btn-primary" disabled={initializing} style={{ width: "100%", height: 56, marginTop: 16 }} onClick={() => void beginCheckout()}>
+            {initializing ? "Initializing payment..." : "Proceed to payment ->"}
+          </button>
+        </div>
+        <aside className="form-card">
+          <span className="label">Order summary</span>
+          <p>Subtotal: {money(totals.subtotal)}</p>
+          <p>Delivery: {money(totals.logisticsFee)}</p>
+          <h3>Total: {money(totals.total)}</h3>
+        </aside>
+      </main>
+      {checkoutSession ? (
+        <div className="payment-modal-shell" role="dialog" aria-modal="true" aria-labelledby="kora-checkout-title">
+          <button className="payment-modal-backdrop" aria-label="Close checkout" onClick={() => {
+            setCheckoutSession(null);
+            setInitializing(false);
+            notify("Payment window closed");
+          }} />
+          <div className="payment-modal">
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <span className="label" id="kora-checkout-title">Kora checkout</span>
+                <p className="editor-note" style={{ marginBottom: 0 }}>{paymentStatus}</p>
+              </div>
+              <button className="btn-ghost" onClick={() => {
+                setCheckoutSession(null);
+                setInitializing(false);
+                notify("Payment window closed");
+              }}>Close</button>
+            </div>
+            <iframe className="payment-iframe" src={checkoutSession.checkoutUrl} title="Kora hosted checkout" />
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

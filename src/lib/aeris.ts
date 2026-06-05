@@ -27,6 +27,8 @@ export type StoreTheme = {
   secondary: string;
   accent: string;
   template: "provisions" | "fashion" | "beauty" | "general";
+  navAlignment: "left" | "center";
+  productRadius: 0 | 2;
 };
 
 export type Store = {
@@ -66,6 +68,7 @@ export type Order = {
   id: string;
   reference: string;
   storeId: string;
+  koraReference?: string;
   items: Array<{ productId: string; name: string; quantity: number; unitPrice: number }>;
   subtotal: number;
   logisticsFee: number;
@@ -82,6 +85,8 @@ export type PayoutRequest = {
   id: string;
   amount: number;
   status: PayoutStatus;
+  koraReference?: string;
+  failureReason?: string;
   allocatedOrderRefs: string[];
   createdAt: string;
 };
