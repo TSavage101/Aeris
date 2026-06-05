@@ -156,10 +156,15 @@ export function buildDemoSessionState(): SessionState {
   };
 }
 
+function sanitizeCartForStore(store: Store, cart: CartLine[]) {
+  const validProductIds = new Set(store.products.filter((product) => !product.deleted).map((product) => product.id));
+  return cart.filter((line) => validProductIds.has(line.productId) && line.quantity > 0);
+}
+
 export function normalizeSessionState(saved?: Partial<SessionState> | null): SessionState {
   const initial = buildInitialSessionState(saved?.draft?.leadEmail || "");
 
-  return {
+  const normalized = {
     ...initial,
     ...saved,
     draft: {
@@ -186,6 +191,11 @@ export function normalizeSessionState(saved?: Partial<SessionState> | null): Ses
       loggedIn: Boolean(saved?.auth?.loggedIn)
     }
   };
+
+  return {
+    ...normalized,
+    cart: sanitizeCartForStore(normalized.store, normalized.cart)
+  };
 }
 
 export function sanitizeStateForStorage(state: SessionState): SessionState {
@@ -200,13 +210,18 @@ export function sanitizeStateForStorage(state: SessionState): SessionState {
 }
 
 export function mergePublicStoreState(baseState: SessionState, publicState: SessionState): SessionState {
-  return {
+  const merged = {
     ...baseState,
     store: publicState.store,
     auth: {
       ...baseState.auth,
       password: ""
     }
+  };
+
+  return {
+    ...merged,
+    cart: sanitizeCartForStore(merged.store, merged.cart)
   };
 }
 

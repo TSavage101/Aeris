@@ -262,7 +262,7 @@ function fileToDataUrl(file: File) {
 }
 
 function normalizeState(saved: Partial<State>): State {
-  return {
+  const normalized = {
     ...initialState,
     ...saved,
     draft: {
@@ -286,6 +286,13 @@ function normalizeState(saved: Partial<State>): State {
       ...initialState.auth,
       ...(saved.auth || {})
     }
+  };
+
+  const validProductIds = new Set(normalized.store.products.filter((product) => !product.deleted).map((product) => product.id));
+
+  return {
+    ...normalized,
+    cart: normalized.cart.filter((line) => validProductIds.has(line.productId) && line.quantity > 0)
   };
 }
 
@@ -2715,6 +2722,29 @@ function CheckoutPage({ state, update, go, notify }: CommonProps) {
       return;
     }
 
+    const checkoutLines = state.cart
+      .map((line) => {
+        const product = state.store.products.find((candidate) => candidate.id === line.productId && !candidate.deleted);
+        if (!product) {
+          return null;
+        }
+
+        return { productId: product.id, name: product.name, quantity: line.quantity, unitPrice: product.price };
+      })
+      .filter((line): line is { productId: string; name: string; quantity: number; unitPrice: number } => Boolean(line));
+
+    if (checkoutLines.length === 0 || checkoutLines.length !== state.cart.length) {
+      update((current) => {
+        const validProductIds = new Set(current.store.products.filter((product) => !product.deleted).map((product) => product.id));
+        return {
+          ...current,
+          cart: current.cart.filter((line) => validProductIds.has(line.productId) && line.quantity > 0)
+        };
+      });
+      notify("Your cart changed while you were shopping. We've refreshed it, please review and try again.");
+      return;
+    }
+
     setInitializing(true);
     setPaymentStatus("Initializing secure checkout...");
 
@@ -2731,10 +2761,7 @@ function CheckoutPage({ state, update, go, notify }: CommonProps) {
           id: state.store.id,
           slug: state.store.slug
         },
-        cart: state.cart.map((line) => {
-          const product = state.store.products.find((candidate) => candidate.id === line.productId)!;
-          return { productId: product.id, name: product.name, quantity: line.quantity, unitPrice: product.price };
-        }),
+        cart: checkoutLines,
         delivery: details,
         totals,
         metadata: {
