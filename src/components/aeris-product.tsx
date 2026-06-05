@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import type { CSSProperties } from "react";
+import type { CSSProperties, InputHTMLAttributes } from "react";
 import type { CartLine, CheckoutDetails, Order, OrderStatus, PayoutRequest, Product, ProductSource, Store, SupportedCity } from "@/lib/aeris";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -33,6 +33,13 @@ type Draft = {
   logoUrl: string;
   heroImageUrl: string;
   productsText: string;
+};
+
+type DraftProductRow = {
+  name: string;
+  price: string;
+  description: string;
+  imageUrl: string;
 };
 
 type State = {
@@ -137,6 +144,66 @@ function onboardingSeed(category: string) {
   return generateAiProducts(category || "General", 2, 0).map((product) => ({
     name: product.name,
     price: product.price,
+    description: product.description || "",
+    imageUrl: product.imageUrl || ""
+  }));
+}
+
+function parseDraftProductRows(text: string): DraftProductRow[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const [name = "", price = "", description = "", imageUrl = ""] = line.split("|").map((part) => part.trim());
+
+      return {
+        name,
+        price,
+        description,
+        imageUrl
+      };
+    })
+    .filter((row) => row.name || row.price || row.description || row.imageUrl);
+}
+
+function serializeDraftProductRows(rows: DraftProductRow[]) {
+  return rows.map((row) => `${row.name} | ${row.price} | ${row.description} | ${row.imageUrl}`).join("\n");
+}
+
+function sanitizePriceInput(value: string) {
+  const cleaned = value.replace(/[^\d.]/g, "");
+  const [whole = "", ...fractionParts] = cleaned.split(".");
+  const fraction = fractionParts.join("").slice(0, 2);
+  return fractionParts.length ? `${whole}.${fraction}` : whole;
+}
+
+function normalizePriceInput(value: string) {
+  if (!value.trim()) {
+    return "";
+  }
+
+  const numeric = Number.parseFloat(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return "";
+  }
+
+  return numeric.toFixed(2);
+}
+
+function draftRowsToProducts(rows: DraftProductRow[]) {
+  return rows
+    .map((row) => ({
+      name: row.name.trim(),
+      price: Number.parseFloat(row.price),
+      description: row.description.trim(),
+      imageUrl: row.imageUrl.trim()
+    }))
+    .filter((product) => product.name.length > 0 && Number.isFinite(product.price) && product.price > 0);
+}
+
+function seedRows(category: string) {
+  return onboardingSeed(category).map((product) => ({
+    name: product.name,
+    price: product.price.toFixed(2),
     description: product.description || "",
     imageUrl: product.imageUrl || ""
   }));
@@ -399,6 +466,10 @@ function BrandNav({ state, update, go }: Pick<CommonProps, "state" | "update" | 
     ["/settings", "05. Settings"]
   ];
 
+  function openStorefront() {
+    window.open(`/s/${state.store.slug}`, "_blank", "noopener,noreferrer");
+  }
+
   return (
     <header className="merchant-nav">
       <button className="brand-lockup" onClick={() => go("/store")} aria-label="Aeris dashboard">
@@ -419,7 +490,7 @@ function BrandNav({ state, update, go }: Pick<CommonProps, "state" | "update" | 
         <span />
       </button>
       <div className="nav-actions">
-        <button className="btn-ghost" onClick={() => go(`/s/${state.store.slug}`)}>
+        <button className="btn-ghost" onClick={openStorefront}>
           View store
         </button>
         <button
@@ -456,7 +527,7 @@ function BrandNav({ state, update, go }: Pick<CommonProps, "state" | "update" | 
               ))}
               <button className="nav-link" onClick={() => {
                 setDrawerOpen(false);
-                go(`/s/${state.store.slug}`);
+                openStorefront();
               }}>View store</button>
             </div>
           </aside>
@@ -471,7 +542,17 @@ function Landing({ state, update, go, notify }: CommonProps) {
   const emailTaken = isEmailTaken(state, email);
   const invalidEmail = email.trim().length > 0 && !emailLooksValid(email);
 
-  function startOnboarding() {
+  function quickStartOnboarding() {
+    const nextDraft = resetDraftState();
+    update((current) => ({
+      ...current,
+      draft: nextDraft,
+      store: buildStore(nextDraft)
+    }));
+    go("/onboarding");
+  }
+
+  function startLeadOnboarding() {
     if (!emailLooksValid(email)) {
       notify("Enter a valid email address");
       return;
@@ -503,7 +584,7 @@ function Landing({ state, update, go, notify }: CommonProps) {
           </h1>
           <div className="subtext-rail">AI-powered storefronts. Real payments. Built for African merchants.</div>
           <div className="row">
-            <button className="btn-primary" onClick={startOnboarding}>
+            <button className="btn-primary" onClick={quickStartOnboarding}>
               Start building
             </button>
             <button className="btn-ghost" onClick={() => go("/s/terra-basket")}>
@@ -555,7 +636,7 @@ function Landing({ state, update, go, notify }: CommonProps) {
             </div>
             {invalidEmail ? <span className="label form-error">X Enter a valid email address</span> : null}
             {emailTaken ? <span className="label form-error">X This email is already in use</span> : null}
-            <button className="btn-primary" style={{ width: "100%", marginTop: 16 }} onClick={startOnboarding} disabled={!emailLooksValid(email) || emailTaken}>
+            <button className="btn-primary" style={{ width: "100%", marginTop: 16 }} onClick={startLeadOnboarding} disabled={!emailLooksValid(email) || emailTaken}>
               Start building
             </button>
           </div>
@@ -580,37 +661,38 @@ function Onboarding({ state, update, go }: CommonProps) {
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState<"manual" | "bulk">("manual");
   const draft = state.draft;
-  const parsedProducts = useMemo(() => parseProductsBulk(draft.productsText), [draft.productsText]);
+  const draftRows = useMemo(() => parseDraftProductRows(draft.productsText), [draft.productsText]);
+  const parsedProducts = useMemo(() => draftRowsToProducts(draftRows), [draftRows]);
   const progress = (step / 5) * 100;
 
   function setDraft(patch: Partial<Draft>) {
     update((current) => ({ ...current, draft: { ...current.draft, ...patch } }));
   }
 
-  function setProducts(products: Array<{ name: string; price: number; description?: string; imageUrl?: string }>) {
-    setDraft({ productsText: serializeProducts(products) });
+  function setDraftRows(rows: DraftProductRow[]) {
+    setDraft({ productsText: serializeDraftProductRows(rows) });
   }
 
-  function updateProductRow(index: number, patch: Partial<{ name: string; price: number; description: string; imageUrl: string }>) {
-    const products = parsedProducts.map((product) => ({ ...product }));
-    products[index] = { ...products[index], ...patch };
-    setProducts(products);
+  function updateProductRow(index: number, patch: Partial<DraftProductRow>) {
+    const rows = draftRows.map((row) => ({ ...row }));
+    rows[index] = { ...rows[index], ...patch };
+    setDraftRows(rows);
   }
 
   function addProductRow() {
-    if (parsedProducts.length >= 10) {
+    if (draftRows.length >= 10) {
       return;
     }
 
-    setProducts([...parsedProducts, { name: "", price: 0, description: "", imageUrl: "" }]);
+    setDraftRows([...draftRows, { name: "", price: "", description: "", imageUrl: "" }]);
   }
 
   function removeProductRow(index: number) {
-    if (parsedProducts.length <= 1) {
+    if (draftRows.length <= 1) {
       return;
     }
 
-    setProducts(parsedProducts.filter((_, productIndex) => productIndex !== index));
+    setDraftRows(draftRows.filter((_, productIndex) => productIndex !== index));
   }
 
   async function attachProductImage(index: number, file?: File | null) {
@@ -630,10 +712,10 @@ function Onboarding({ state, update, go }: CommonProps) {
   }
 
   useEffect(() => {
-    if (step === 3 && parsedProducts.length === 0) {
-      setProducts(onboardingSeed(draft.category));
+    if (step === 3 && draftRows.length === 0) {
+      setDraftRows(seedRows(draft.category));
     }
-  }, [draft.category, parsedProducts.length, step]);
+  }, [draft.category, draftRows.length, step]);
 
   function next() {
     if (step < 5) {
@@ -711,25 +793,27 @@ function Onboarding({ state, update, go }: CommonProps) {
             </>
           ) : (
             <div className="field-stack">
-              {parsedProducts.map((product, index) => (
-                <div className="product-entry" key={`${product.name}-${index}`}>
-                  <Field id={`p-name-${index}`} label="Product name" value={product.name} placeholder="Smoked Jollof Party Tray" onChange={(name) => updateProductRow(index, { name })} />
-                  <Field id={`p-price-${index}`} label="Price (NGN)" value={String(product.price || "")} placeholder="18500" onChange={(price) => updateProductRow(index, { price: Number(price.replace(/\D/g, "")) || 0 })} />
-                  <Field id={`p-desc-${index}`} label="Description" value={product.description || ""} placeholder="Family-size smoky jollof rice with fried plantain." onChange={(description) => updateProductRow(index, { description })} />
+              {draftRows.map((product, index) => (
+                <div className="product-entry" key={index}>
+                  <div className="product-entry-fields">
+                    <Field id={`p-name-${index}`} label="Product name" value={product.name} placeholder="Smoked Jollof Party Tray" onChange={(name) => updateProductRow(index, { name })} />
+                    <Field id={`p-price-${index}`} label="Price (NGN)" value={product.price} placeholder="18500.00" inputMode="decimal" onChange={(price) => updateProductRow(index, { price: sanitizePriceInput(price) })} onBlur={() => updateProductRow(index, { price: normalizePriceInput(product.price) })} />
+                    <Field id={`p-desc-${index}`} label="Description" value={product.description || ""} placeholder="Family-size smoky jollof rice with fried plantain." onChange={(description) => updateProductRow(index, { description })} />
+                  </div>
                   <div className="field product-image-field">
                     <AssetUploadField id={`p-img-${index}`} label="Product image" hint="Choose a product image for this storefront listing." onFileSelect={(file) => void attachProductImage(index, file)} />
-                    <div className="row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+                    <div className="product-thumb-stack">
                       {product.imageUrl ? <div className="product-thumb-preview" style={{ backgroundImage: `url(${product.imageUrl})` }} /> : <div className="product-thumb-preview logo-preview-empty">IMAGE</div>}
                       {product.imageUrl ? <button className="btn-danger" type="button" onClick={() => updateProductRow(index, { imageUrl: "" })}>Remove image</button> : null}
                     </div>
                   </div>
-                  <button className="btn-danger" aria-label="Delete product" disabled={parsedProducts.length <= 1} onClick={() => removeProductRow(index)}>x</button>
+                  <button className="btn-danger product-entry-delete" type="button" aria-label="Delete product" disabled={draftRows.length <= 1} onClick={() => removeProductRow(index)}>Remove</button>
                 </div>
               ))}
-              <button className="btn-ghost" onClick={addProductRow} disabled={parsedProducts.length >= 10}>
+              <button className="btn-ghost" type="button" onClick={addProductRow} disabled={draftRows.length >= 10}>
                 + Add product
               </button>
-              {parsedProducts.length >= 10 && <span className="label">Maximum 10 products</span>}
+              {draftRows.length >= 10 && <span className="label">Maximum 10 products</span>}
             </div>
           )}
           <button className="btn-primary" onClick={next} disabled={parsedProducts.length < 1}>Next step</button>
@@ -767,11 +851,11 @@ function Onboarding({ state, update, go }: CommonProps) {
     </div>
   );
 }
-function Field({ id, label, value, onChange, readOnly, disabled, placeholder, className, type = "text" }: { id: string; label: string; value: string; onChange: (value: string) => void; readOnly?: boolean; disabled?: boolean; placeholder?: string; className?: string; type?: "text" | "email" | "password" | "number" }) {
+function Field({ id, label, value, onChange, readOnly, disabled, placeholder, className, type = "text", inputMode, onBlur }: { id: string; label: string; value: string; onChange: (value: string) => void; readOnly?: boolean; disabled?: boolean; placeholder?: string; className?: string; type?: "text" | "email" | "password" | "number"; inputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"]; onBlur?: () => void }) {
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>{label}</label>
-      <input id={id} type={type} className={`field-input ${className || ""}`.trim()} disabled={disabled} placeholder={placeholder} value={value} readOnly={readOnly} onChange={(event) => onChange(event.target.value)} />
+      <input id={id} type={type} inputMode={inputMode} className={`field-input ${className || ""}`.trim()} disabled={disabled} placeholder={placeholder} value={value} readOnly={readOnly} onBlur={onBlur} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }
@@ -910,6 +994,7 @@ function Generating({ go }: CommonProps) {
 
 function Preview({ state, update, go, notify }: CommonProps) {
   const products = state.store.products.filter((product) => !product.deleted);
+  const [aiPrompt, setAiPrompt] = useState("");
 
   async function attachPreviewAsset(kind: "logoUrl" | "heroImageUrl", file?: File | null) {
     if (!file) {
@@ -935,11 +1020,17 @@ function Preview({ state, update, go, notify }: CommonProps) {
         <Field id="preview-tagline" label="Store tagline" value={state.store.heroCopy} placeholder="Fast delivery for busy households across Lagos." onChange={(heroCopy) => update((current) => ({ ...current, draft: { ...current.draft, tagline: heroCopy }, store: { ...current.store, heroCopy } }))} />
         <AssetUploadField id="preview-logo" label="Store logo upload" hint="Change or confirm the logo shown in storefront navigation." onFileSelect={(file) => void attachPreviewAsset("logoUrl", file)} />
         <AssetUploadField id="preview-hero" label="Hero image upload" hint="Change or confirm the hero image shown behind the storefront headline." onFileSelect={(file) => void attachPreviewAsset("heroImageUrl", file)} />
-        <div className="row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
-          {state.store.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${state.store.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
-          {state.store.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${state.store.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
+        <div className="preview-asset-row">
+          <div className="asset-preview-stack">
+            <span className="field-label">Store logo</span>
+            {state.store.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${state.store.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
+          </div>
+          <div className="asset-preview-stack">
+            <span className="field-label">Hero image</span>
+            {state.store.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${state.store.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
+          </div>
         </div>
-        <Area id="ai" label="AI refinement" rows={4} value="" placeholder="Ask Aeris to warm the homepage copy or change the hero direction." onChange={() => undefined} />
+        <Area id="ai" label="AI refinement" rows={4} value={aiPrompt} placeholder="Ask Aeris to warm the homepage copy or change the hero direction." onChange={setAiPrompt} />
         <button className="btn-primary" style={{ width: "100%" }} onClick={() => notify("Proposed AI changes ready for review")}>Apply changes</button>
         <button className="btn-ghost" style={{ width: "100%", marginTop: 8 }} onClick={() => notify("Changes discarded")}>Discard</button>
       </aside>
