@@ -108,15 +108,3 @@ The repo includes:
 - `/checkout` — customer checkout
 - `/order/[ref]` — customer order status
 
-## MVP Architecture
-
-This implementation intentionally models storefronts as tenant-rendered views over shared application state. It does not generate or deploy a separate app per merchant. The current MVP uses local storage to keep the demo self-contained, while the domain module keeps the important commerce rules isolated for later Supabase and Kora integration.
-
-## Next Production Steps
-
-- Replace local storage with Supabase Auth, Postgres, and Realtime.
-- Implement Cloudinary upload signing and persisted product image assets.
-- Add Kora hosted checkout session creation and webhook verification.
-- Add server-side tenant resolution for wildcard domains.
-- Add Prisma or Supabase schema migrations for merchants, stores, products, orders, payouts, and audit events.
-- Add end-to-end tests for onboarding, publish, checkout, order status updates, and payout requests.
