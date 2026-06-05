@@ -323,8 +323,94 @@ function isEmailTaken(state: State, email: string) {
     .some((candidate) => candidate?.trim().toLowerCase() === normalized);
 }
 
+async function bootstrapStateFromServer(pathname: string) {
+  const response = await fetch(`/api/session/bootstrap?path=${encodeURIComponent(pathname)}`, {
+    method: "GET",
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(payload?.error || "Unable to load Aeris session");
+  }
+
+  const payload = await response.json() as { state: State };
+  return normalizeState(payload.state);
+}
+
 function persistState(nextState: State) {
-  localStorage.setItem("aeris-product-state", JSON.stringify(nextState));
+  void fetch("/api/session/state", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ state: { ...nextState, auth: { ...nextState.auth, password: "" } } })
+  });
+}
+
+async function claimStoreAccount(input: { email: string; password: string; slug: string; state: State }) {
+  const response = await fetch("/api/auth/claim", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  const payload = await response.json().catch(() => null) as { state?: State; error?: string } | null;
+  if (!response.ok || !payload?.state) {
+    throw new Error(payload?.error || "Unable to claim store");
+  }
+
+  return normalizeState(payload.state);
+}
+
+async function loginMerchant(input: { email: string; password: string }) {
+  const response = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  const payload = await response.json().catch(() => null) as { state?: State; error?: string } | null;
+  if (!response.ok || !payload?.state) {
+    throw new Error(payload?.error || "Unable to log in");
+  }
+
+  return normalizeState(payload.state);
+}
+
+async function logoutMerchant() {
+  const response = await fetch("/api/auth/logout", {
+    method: "POST"
+  });
+
+  const payload = await response.json().catch(() => null) as { state?: State; error?: string } | null;
+  if (!response.ok || !payload?.state) {
+    throw new Error(payload?.error || "Unable to log out");
+  }
+
+  return normalizeState(payload.state);
+}
+
+async function uploadImageAsset(file: File, folder: string) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("folder", folder);
+
+  const response = await fetch("/api/uploads/cloudinary", {
+    method: "POST",
+    body: formData
+  });
+
+  const payload = await response.json().catch(() => null) as { url?: string; error?: string } | null;
+  if (!response.ok || !payload?.url) {
+    throw new Error(payload?.error || "Unable to upload image");
+  }
+
+  return payload.url;
 }
 
 function openStorefrontWindow(slug: string) {
@@ -481,18 +567,29 @@ export function AerisProduct() {
   const isMerchantPath = merchantPaths.includes(pathname) || (pathname.startsWith("/products/") && pathname !== "/products" && pathname !== "/products/new");
 
   useEffect(() => {
-    const saved = localStorage.getItem("aeris-product-state");
-    if (saved) {
-      setState(normalizeState(JSON.parse(saved) as Partial<State>));
-    }
-    setHydrated(true);
-  }, []);
+    let active = true;
 
-  useEffect(() => {
-    if (hydrated) {
-      localStorage.setItem("aeris-product-state", JSON.stringify(state));
-    }
-  }, [hydrated, state]);
+    void bootstrapStateFromServer(pathname)
+      .then((nextState) => {
+        if (active) {
+          setState(nextState);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setState(initialState);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setHydrated(true);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [pathname]);
 
   useEffect(() => {
     if (!hydrated) {
@@ -509,7 +606,11 @@ export function AerisProduct() {
   }
 
   function update(mutator: (current: State) => State) {
-    setState((current) => mutator(current));
+    setState((current) => {
+      const nextState = mutator(current);
+      persistState(nextState);
+      return nextState;
+    });
   }
 
   function notify(message: string) {
@@ -821,7 +922,7 @@ function Onboarding({ state, update, go }: CommonProps) {
       return;
     }
 
-    updateProductRow(index, { imageUrl: await fileToDataUrl(file) });
+    updateProductRow(index, { imageUrl: await uploadImageAsset(file, "aeris/products") });
   }
 
   async function attachBrandAsset(kind: "logoUrl" | "heroImageUrl", file?: File | null) {
@@ -829,7 +930,7 @@ function Onboarding({ state, update, go }: CommonProps) {
       return;
     }
 
-    setDraft({ [kind]: await fileToDataUrl(file) } as Partial<Draft>);
+    setDraft({ [kind]: await uploadImageAsset(file, kind === "logoUrl" ? "aeris/drafts/logo" : "aeris/drafts/hero") } as Partial<Draft>);
   }
 
   useEffect(() => {
@@ -1122,7 +1223,7 @@ function Preview({ state, update, go, notify }: CommonProps) {
       return;
     }
 
-    const assetUrl = await fileToDataUrl(file);
+    const assetUrl = await uploadImageAsset(file, kind === "logoUrl" ? "aeris/preview/logo" : "aeris/preview/hero");
     update((current) => ({
       ...current,
       draft: { ...current.draft, [kind]: assetUrl },
@@ -1187,6 +1288,43 @@ function Claim({ state, update, go, notify }: CommonProps) {
     setSlug(`${base}-${suffix}`);
   }
 
+  async function submitClaim() {
+    if (emailTaken) {
+      notify("That email is already attached to another merchant account");
+      return;
+    }
+
+    if (!passwordsMatch) {
+      notify("Passwords do not match");
+      return;
+    }
+
+    try {
+      const nextState = await claimStoreAccount({
+        email: email.trim().toLowerCase(),
+        password,
+        slug,
+        state: {
+          ...state,
+          draft: {
+            ...state.draft,
+            leadEmail: email.trim().toLowerCase()
+          },
+          store: {
+            ...state.store,
+            slug,
+            ownerEmail: email.trim().toLowerCase(),
+            published: true
+          }
+        }
+      });
+      update(() => nextState);
+      go("/store");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Unable to claim your store");
+    }
+  }
+
   return (
     <main className="wizard-shell" style={{ display: "grid", placeItems: "center" }}>
       <div className="form-card corner-marked" style={{ width: "min(480px, calc(100% - 32px))" }}>
@@ -1207,20 +1345,7 @@ function Claim({ state, update, go, notify }: CommonProps) {
         </div>
         {emailTaken ? <span className="label form-error">X This email is already attached to another store</span> : null}
         {!passwordsMatch && confirmPassword ? <span className="label form-error">X Passwords do not match</span> : null}
-        <button className="btn-primary" disabled={!slugState.available || !password.trim() || !passwordsMatch || !emailLooksValid(email) || emailTaken} style={{ width: "100%", height: 56, marginTop: 24 }} onClick={() => {
-          if (emailTaken) {
-            notify("That email is already attached to another merchant account");
-            return;
-          }
-          update((current) => ({
-            ...current,
-            draft: { ...current.draft, leadEmail: email.trim().toLowerCase() },
-            store: { ...current.store, slug, ownerEmail: email.trim().toLowerCase(), published: true },
-            auth: { email: email.trim().toLowerCase(), password, loggedIn: true },
-            activity: [`Published ${slug}.aeris.store`, ...current.activity]
-          }));
-          go("/store");
-        }}>Create account and publish</button>
+        <button className="btn-primary" disabled={!slugState.available || !password.trim() || !passwordsMatch || !emailLooksValid(email) || emailTaken} style={{ width: "100%", height: 56, marginTop: 24 }} onClick={() => void submitClaim()}>Create account and publish</button>
         <button className="btn-ghost" style={{ width: "100%", marginTop: 12 }} onClick={() => go("/login")}>Already have an account? Log in</button>
       </div>
     </main>
@@ -1247,17 +1372,19 @@ function Login({ state, update, go, notify }: CommonProps) {
       return;
     }
 
-    if (email.trim() !== state.auth.email || password !== state.auth.password) {
-      notify("Incorrect email or password");
-      return;
-    }
-
-    update((current) => {
-      const nextState = { ...current, auth: { ...current.auth, loggedIn: true } };
-      persistState(nextState);
-      return nextState;
-    });
-    go("/store");
+    void (async () => {
+      try {
+        const nextState = await loginMerchant({
+          email: email.trim().toLowerCase(),
+          password
+        });
+        update(() => nextState);
+        notify("Logged in");
+        go("/store");
+      } catch (error) {
+        notify(error instanceof Error ? error.message : "Incorrect email or password");
+      }
+    })();
   }
 
   return (
@@ -1302,7 +1429,7 @@ function Dashboard({ state, update, go, notify, section }: CommonProps & { secti
           {section === "products" && <ProductsManager state={state} update={update} notify={notify} products={visibleProducts} go={go} />}
           {section === "orders" && <OrdersManager state={state} update={update} />}
           {section === "payouts" && <PayoutsManager state={state} update={update} balance={balance} notify={notify} />}
-          {section === "settings" && <SettingsManager state={state} update={update} notify={notify} />}
+          {section === "settings" && <SettingsManager state={state} update={update} notify={notify} go={go} />}
         </main>
         <aside className="dashboard-sidebar">
           <div className="side-box">
@@ -1322,10 +1449,15 @@ function Dashboard({ state, update, go, notify, section }: CommonProps & { secti
               className="btn-ghost"
               style={{ width: "100%" }}
               onClick={() => {
-                const nextState = { ...state, auth: { ...state.auth, loggedIn: false } };
-                persistState(nextState);
-                update(() => nextState);
-                go("/login");
+                void (async () => {
+                  try {
+                    const nextState = await logoutMerchant();
+                    update(() => nextState);
+                    go("/login");
+                  } catch (error) {
+                    notify(error instanceof Error ? error.message : "Unable to log out");
+                  }
+                })();
               }}
             >
               Logout
@@ -1622,7 +1754,7 @@ function ProductEditorPage({ state, update, go, notify, mode }: CommonProps & { 
       return;
     }
 
-    setImageUrl(await fileToDataUrl(file));
+    setImageUrl(await uploadImageAsset(file, "aeris/products"));
   }
 
   function saveProduct() {
@@ -1816,7 +1948,7 @@ function PayoutsManager({ state, update, balance, notify }: { state: State; upda
   );
 }
 
-function SettingsManager({ state, update, notify }: { state: State; update: CommonProps["update"]; notify: CommonProps["notify"] }) {
+function SettingsManager({ state, update, notify, go }: { state: State; update: CommonProps["update"]; notify: CommonProps["notify"]; go: CommonProps["go"] }) {
   const locked = state.store.published;
   const [storeName, setStoreName] = useState(state.store.name);
   const [tagline, setTagline] = useState(state.store.heroCopy);
@@ -1835,7 +1967,7 @@ function SettingsManager({ state, update, notify }: { state: State; update: Comm
       return;
     }
 
-    const dataUrl = await fileToDataUrl(file);
+    const dataUrl = await uploadImageAsset(file, kind === "logo" ? "aeris/brand/logo" : "aeris/brand/hero");
     if (kind === "logo") {
       setLogoUrl(dataUrl);
       return;
@@ -1906,12 +2038,15 @@ function SettingsManager({ state, update, notify }: { state: State; update: Comm
         <button
           className="btn-ghost"
           onClick={() => {
-            update((current) => {
-              const nextState = { ...current, auth: { ...current.auth, loggedIn: false } };
-              persistState(nextState);
-              return nextState;
-            });
-            window.location.href = "/login";
+            void (async () => {
+              try {
+                const nextState = await logoutMerchant();
+                update(() => nextState);
+                go("/login");
+              } catch (error) {
+                notify(error instanceof Error ? error.message : "Unable to log out");
+              }
+            })();
           }}
         >
           Logout
