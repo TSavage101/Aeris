@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import type { CSSProperties, InputHTMLAttributes } from "react";
 import type { CartLine, CheckoutDetails, Order, OrderStatus, PayoutRequest, Product, ProductSource, Store, SupportedCity } from "@/lib/aeris";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   SUPPORTED_CITIES,
   allocatePayout,
@@ -18,6 +18,7 @@ import {
   parseProductsBulk,
   slugify
 } from "@/lib/aeris";
+import { NIGERIAN_BANKS } from "@/lib/server/kora";
 
 type Draft = {
   leadEmail: string;
@@ -636,6 +637,20 @@ export function AerisProduct() {
       {state.auth?.loggedIn && pathname === "/orders" && <Dashboard {...common} section="orders" />}
       {state.auth?.loggedIn && pathname === "/payouts" && <Dashboard {...common} section="payouts" />}
       {state.auth?.loggedIn && pathname === "/settings" && <Dashboard {...common} section="settings" />}
+      {pathname === "/admin" && (
+        state.auth?.loggedIn && state.auth.email === "admin@aeris.store" ? (
+          <AdminDashboard {...common} />
+        ) : (
+          <main className="wizard-shell" style={{ display: "grid", placeItems: "center" }}>
+            <div className="form-card corner-marked" style={{ width: "min(480px, calc(100% - 32px))" }}>
+              <Corners />
+              <h2>Admin Access</h2>
+              <p>Please log in using your administrator credentials.</p>
+              <button className="btn-primary" style={{ width: "100%", marginTop: 24 }} onClick={() => go("/login")}>Go to Login</button>
+            </div>
+          </main>
+        )
+      )}
       {pathname.startsWith("/s/") && <PublicStore {...common} />}
       {pathname === "/cart" && <CartPage {...common} />}
       {pathname === "/checkout" && <CheckoutPage {...common} />}
@@ -892,9 +907,19 @@ function Onboarding({ state, update, go }: CommonProps) {
   const [resolvingBank, setResolvingBank] = useState(false);
   const [bankError, setBankError] = useState("");
   const [bankVerified, setBankVerified] = useState(false);
+  const lastVerifiedBankKey = useRef("");
 
   useEffect(() => {
+    const verificationKey = `${draft.bankName}:${draft.accountNumber}`;
+
     if (draft.accountNumber.length === 10 && draft.bankName) {
+      if (lastVerifiedBankKey.current === verificationKey && draft.accountName) {
+        setResolvingBank(false);
+        setBankError("");
+        setBankVerified(true);
+        return;
+      }
+
       let cancelled = false;
       setResolvingBank(true);
       setBankError("");
@@ -921,6 +946,7 @@ function Onboarding({ state, update, go }: CommonProps) {
               ...current,
               draft: { ...current.draft, accountName: data.accountName! }
             }));
+            lastVerifiedBankKey.current = verificationKey;
             setBankVerified(true);
           }
         } catch (err) {
@@ -938,10 +964,11 @@ function Onboarding({ state, update, go }: CommonProps) {
         cancelled = true;
       };
     } else {
+      lastVerifiedBankKey.current = "";
       setBankVerified(false);
       setBankError("");
     }
-  }, [draft.accountNumber, draft.bankName, update]);
+  }, [draft.accountNumber, draft.bankName, draft.accountName]);
 
   const parsedProducts = useMemo(() => {
     if (mode === "manual") return draftRowsToProducts(manualRows);
@@ -1040,12 +1067,12 @@ function Onboarding({ state, update, go }: CommonProps) {
           <span className="label">02. Payout account</span>
           <h2>Where should we send your money?</h2>
           <div className="field-stack">
-            <Select id="bank" label="Bank name" value={draft.bankName} placeholder="Select your bank" onChange={(bankName) => setDraft({ bankName })} options={["Access Bank", "GTBank", "Zenith Bank", "UBA", "First Bank"]} />
+          <Select id="bank" label="Bank name" value={draft.bankName} placeholder="Select your bank" onChange={(bankName) => setDraft({ bankName })} options={NIGERIAN_BANKS} />
             <Field id="account-number" label="Account number" value={draft.accountNumber} placeholder="0123456789" onChange={(accountNumber) => setDraft({ accountNumber: accountNumber.replace(/\D/g, "").slice(0, 10) })} />
             <Field id="account-name" label="Account name" value={draft.accountName} placeholder="Verified account name appears here" onChange={(accountName) => setDraft({ accountName })} readOnly={true} />
             {resolvingBank && <span className="label text-muted">Verifying account with Kora...</span>}
             {bankError && <span className="label form-error">✕ {bankError}</span>}
-            {bankVerified && <StatusBadge>Account verified: {draft.accountName}</StatusBadge>}
+            {bankVerified && <StatusBadge>{`Account verified: ${draft.accountName}`}</StatusBadge>}
             {!resolvingBank && !bankError && !bankVerified && <span className="label">Enter 10 digits to verify account...</span>}
           </div>
           <button className="btn-primary" onClick={next} disabled={!bankVerified || resolvingBank}>Next step</button>
@@ -1456,7 +1483,7 @@ function Login({ state, update, go, notify }: CommonProps) {
         });
         update(() => nextState);
         notify("Logged in");
-        go("/store");
+        go(email.trim().toLowerCase() === "admin@aeris.store" ? "/admin" : "/store");
       } catch (error) {
         notify(error instanceof Error ? error.message : "Incorrect email or password");
       }
@@ -2149,6 +2176,312 @@ function AssetUploadField({ id, label, hint, onFileSelect, disabled, uploading }
       </div>
       <input disabled={disabled || uploading} id={id} className="asset-upload-input" type="file" accept="image/*" onChange={(event) => onFileSelect(event.target.files?.[0])} />
     </div>
+  );
+}
+
+function AdminDashboard({ state, update, go, notify }: CommonProps) {
+  const [data, setData] = useState<{
+    stores: any[];
+    merchants: any[];
+    auditLogs: any[];
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState<"stores" | "orders" | "payouts" | "audit">("stores");
+  const [retryingPayout, setRetryingPayout] = useState<string | null>(null);
+  const [suspendingStore, setSuspendingStore] = useState<string | null>(null);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const response = await fetch("/api/admin/data");
+      if (!response.ok) {
+        throw new Error(await response.text() || "Failed to load admin data");
+      }
+      const json = await response.json();
+      setData(json);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load admin data");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadData();
+  }, []);
+
+  async function toggleSuspension(storeId: string, currentSuspended: boolean) {
+    setSuspendingStore(storeId);
+    try {
+      const response = await fetch("/api/admin/stores/suspend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storeId, suspend: !currentSuspended })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      notify(currentSuspended ? "Store unsuspended successfully" : "Store suspended successfully");
+      await loadData();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Failed to update suspension status");
+    } finally {
+      setSuspendingStore(null);
+    }
+  }
+
+  async function retryPayout(storeId: string, payoutId: string) {
+    setRetryingPayout(payoutId);
+    try {
+      const response = await fetch("/api/admin/payouts/retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storeId, payoutId })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const resData = await response.json();
+      notify(`Payout retried! New Status: ${resData.status}`);
+      await loadData();
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Failed to retry payout");
+    } finally {
+      setRetryingPayout(null);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      const nextState = await logoutMerchant();
+      update(() => nextState);
+      go("/login");
+    } catch (err) {
+      notify("Failed to log out");
+    }
+  }
+
+  if (loading) {
+    return (
+      <main className="wizard-shell" style={{ display: "grid", placeItems: "center" }}>
+        <div className="loader-container" style={{ textAlign: "center" }}>
+          <div className="spinner" />
+          <p style={{ marginTop: 16 }}>Loading platform admin data...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className="wizard-shell" style={{ display: "grid", placeItems: "center" }}>
+        <div className="form-card corner-marked" style={{ width: "min(480px, calc(100% - 32px))" }}>
+          <Corners />
+          <h2 className="form-error">✕ Error</h2>
+          <p>{error}</p>
+          <button className="btn-primary" style={{ width: "100%", marginTop: 24 }} onClick={loadData}>Retry</button>
+        </div>
+      </main>
+    );
+  }
+
+  const stores = data?.stores || [];
+  const merchants = data?.merchants || [];
+  const auditLogs = data?.auditLogs || [];
+
+  const allOrders = stores.flatMap(store => {
+    const stateJson = store.state_json || {};
+    const orders = stateJson.orders || [];
+    return orders.map((order: any) => ({
+      ...order,
+      storeId: store.id,
+      storeSlug: store.slug,
+      storeName: stateJson.store?.name || store.slug
+    }));
+  }).sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+  const allPayouts = stores.flatMap(store => {
+    const stateJson = store.state_json || {};
+    const payouts = stateJson.payouts || [];
+    return payouts.map((payout: any) => ({
+      ...payout,
+      storeId: store.id,
+      storeSlug: store.slug,
+      storeName: stateJson.store?.name || store.slug
+    }));
+  }).sort((a: any, b: any) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime());
+
+  return (
+    <>
+      <header className="merchant-nav">
+        <div className="brand-lockup">
+          <span className="logo-box">A</span>
+          <span className="wordmark">AERIS ADMIN</span>
+          <StatusBadge>PLATFORM OPERATOR</StatusBadge>
+        </div>
+        <nav className="nav-center">
+          <button className={`nav-link ${activeTab === "stores" ? "active" : ""}`} onClick={() => setActiveTab("stores")}>Stores ({stores.length})</button>
+          <button className={`nav-link ${activeTab === "orders" ? "active" : ""}`} onClick={() => setActiveTab("orders")}>Orders ({allOrders.length})</button>
+          <button className={`nav-link ${activeTab === "payouts" ? "active" : ""}`} onClick={() => setActiveTab("payouts")}>Payouts ({allPayouts.length})</button>
+          <button className={`nav-link ${activeTab === "audit" ? "active" : ""}`} onClick={() => setActiveTab("audit")}>Audit Logs ({auditLogs.length})</button>
+        </nav>
+        <div className="nav-actions">
+          <button className="btn-ghost" onClick={handleLogout}>Logout</button>
+        </div>
+      </header>
+
+      <div className="dashboard-layout" style={{ maxWidth: 1200, margin: "0 auto", padding: "40px 20px" }}>
+        <main className="dashboard-main" style={{ width: "100%" }}>
+          {activeTab === "stores" && (
+            <>
+              <div className="row" style={{ justifyContent: "space-between", marginBottom: 24 }}>
+                <h2>Platform Stores</h2>
+              </div>
+              <div className="table">
+                <div className="table-row table-header" style={{ fontWeight: "bold", borderBottom: "2px solid var(--color-clay)" }}>
+                  <span>Store Name / Slug</span>
+                  <span>Owner Email</span>
+                  <span>Products</span>
+                  <span>Status</span>
+                  <span>Actions</span>
+                </div>
+                {stores.map((store: any) => {
+                  const stateJson = store.state_json || {};
+                  const isSuspended = stateJson.store?.suspended || false;
+                  return (
+                    <div className="table-row" key={store.id}>
+                      <strong>
+                        {stateJson.store?.name || store.slug}
+                        <br />
+                        <a href={`/s/${store.slug}`} target="_blank" rel="noopener noreferrer" className="label" style={{ color: "var(--color-forest)", textDecoration: "underline" }}>
+                          {store.slug}.aeris.store ↗
+                        </a>
+                      </strong>
+                      <span className="mono">{store.owner_email || "N/A"}</span>
+                      <span>{stateJson.store?.products?.length || 0} items</span>
+                      <span className={`chip ${isSuspended ? "coral" : "mint"}`}>
+                        {isSuspended ? "Suspended" : "Active"}
+                      </span>
+                      <button
+                        className={isSuspended ? "btn-primary" : "btn-danger"}
+                        disabled={suspendingStore === store.id}
+                        onClick={() => toggleSuspension(store.id, isSuspended)}
+                      >
+                        {suspendingStore === store.id ? "Processing..." : isSuspended ? "Unsuspend" : "Suspend"}
+                      </button>
+                    </div>
+                  );
+                })}
+                {stores.length === 0 && <p style={{ padding: 24, textAlign: "center" }}>No stores found on the platform.</p>}
+              </div>
+            </>
+          )}
+
+          {activeTab === "orders" && (
+            <>
+              <div className="row" style={{ justifyContent: "space-between", marginBottom: 24 }}>
+                <h2>All Platform Orders</h2>
+              </div>
+              <div className="table">
+                <div className="table-row table-header" style={{ fontWeight: "bold", borderBottom: "2px solid var(--color-clay)" }}>
+                  <span>Ref / Store</span>
+                  <span>Shopper</span>
+                  <span>Amount</span>
+                  <span>Status</span>
+                  <span>Date</span>
+                </div>
+                {allOrders.map((order: any) => (
+                  <div className="table-row" key={order.id}>
+                    <strong>
+                      {order.reference}
+                      <br />
+                      <span className="label">{order.storeName}</span>
+                    </strong>
+                    <span>{order.customerEmail}</span>
+                    <span className="mono">{money(order.totalAmount)}</span>
+                    <span className={`chip ${order.status === "fulfilled" ? "mint" : order.status === "paid" ? "gold" : "coral"}`}>
+                      {order.status}
+                    </span>
+                    <span style={{ fontSize: 12 }}>{new Date(order.createdAt).toLocaleDateString()}</span>
+                  </div>
+                ))}
+                {allOrders.length === 0 && <p style={{ padding: 24, textAlign: "center" }}>No shopper orders found.</p>}
+              </div>
+            </>
+          )}
+
+          {activeTab === "payouts" && (
+            <>
+              <div className="row" style={{ justifyContent: "space-between", marginBottom: 24 }}>
+                <h2>Merchant Payout Requests</h2>
+              </div>
+              <div className="table">
+                <div className="table-row table-header" style={{ fontWeight: "bold", borderBottom: "2px solid var(--color-clay)" }}>
+                  <span>Payout Ref / Store</span>
+                  <span>Destination Bank Account</span>
+                  <span>Amount</span>
+                  <span>Status</span>
+                  <span>Actions</span>
+                </div>
+                {allPayouts.map((payout: any) => (
+                  <div className="table-row" key={payout.id}>
+                    <strong>
+                      {payout.koraReference || payout.id}
+                      <br />
+                      <span className="label">{payout.storeName}</span>
+                    </strong>
+                    <span style={{ fontSize: 13 }}>
+                      <strong>{payout.bankName}</strong> - {payout.accountNumber}
+                      <br />
+                      <span className="label">{payout.accountName}</span>
+                    </span>
+                    <span className="mono" style={{ fontWeight: "bold" }}>{money(payout.amount)}</span>
+                    <span className={`chip ${payout.status === "paid" ? "mint" : payout.status === "processing" ? "gold" : "coral"}`}>
+                      {payout.status}
+                    </span>
+                    <div>
+                      {payout.status === "failed" && (
+                        <button
+                          className="btn-primary"
+                          disabled={retryingPayout === payout.id}
+                          onClick={() => retryPayout(payout.storeId, payout.id)}
+                        >
+                          {retryingPayout === payout.id ? "Retrying..." : "Retry Payout"}
+                        </button>
+                      )}
+                      {payout.status !== "failed" && <span className="label text-muted">No action required</span>}
+                    </div>
+                  </div>
+                ))}
+                {allPayouts.length === 0 && <p style={{ padding: 24, textAlign: "center" }}>No payout requests found.</p>}
+              </div>
+            </>
+          )}
+
+          {activeTab === "audit" && (
+            <>
+              <div className="row" style={{ justifyContent: "space-between", marginBottom: 24 }}>
+                <h2>Platform Audit Logs</h2>
+              </div>
+              <div className="table">
+                <div className="table-row table-header" style={{ fontWeight: "bold", borderBottom: "2px solid var(--color-clay)" }}>
+                  <span>Time</span>
+                  <span>Action Type</span>
+                  <span>Store Ref</span>
+                  <span>Details</span>
+                </div>
+                {auditLogs.map((log: any) => (
+                  <div className="table-row" key={log.id} style={{ alignItems: "flex-start" }}>
+                    <span style={{ fontSize: 12, minWidth: 150 }}>{new Date(log.created_at).toLocaleString()}</span>
+                    <span className="mono" style={{ fontWeight: "bold", fontSize: 12 }}>{log.action}</span>
+                    <span className="mono" style={{ fontSize: 12 }}>{log.store_id || "System"}</span>
+                    <span style={{ fontSize: 13 }}>{log.details}</span>
+                  </div>
+                ))}
+                {auditLogs.length === 0 && <p style={{ padding: 24, textAlign: "center" }}>No audit logs recorded.</p>}
+              </div>
+            </>
+          )}
+        </main>
+      </div>
+    </>
   );
 }
 
