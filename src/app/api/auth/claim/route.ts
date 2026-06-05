@@ -5,6 +5,7 @@ import type { SessionState } from "@/lib/server/state";
 import { ensureSchema, getPool } from "@/lib/server/db";
 import { applyAuthCookie, clearGuestCookie, createMerchantSession, findMerchantByEmail, findStoreBySlug, upsertStoreRecord } from "@/lib/server/session";
 import { normalizeSessionState, sanitizeStateForStorage } from "@/lib/server/state";
+import { logAuditEvent } from "@/lib/server/audit";
 
 export async function POST(request: Request) {
   try {
@@ -71,6 +72,8 @@ export async function POST(request: Request) {
       ownerEmail: normalizedEmail,
       state: sanitizeStateForStorage(nextState)
     });
+
+    await logAuditEvent(storeId, "merchant_signup_claim", `Merchant ${normalizedEmail} signed up and claimed store ${normalizedSlug}`);
 
     const session = await createMerchantSession({
       merchantId,

@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import type { SessionState } from "@/lib/server/state";
 import { buildDemoSessionState, buildInitialSessionState, mergePublicStoreState, normalizeSessionState, sanitizeStateForStorage } from "@/lib/server/state";
 import { ensureSchema, getPool } from "@/lib/server/db";
+import { logAuditEvent } from "@/lib/server/audit";
 
 export const AUTH_COOKIE = "aeris_auth_session";
 export const GUEST_COOKIE = "aeris_guest_session";
@@ -43,7 +44,7 @@ type MerchantRow = {
   store_id: string | null;
 };
 
-async function findSession(token?: string | null) {
+export async function findSession(token?: string | null) {
   if (!token) {
     return null;
   }
@@ -197,6 +198,68 @@ export async function bootstrapStateForPath(pathname: string) {
   };
 }
 
+async function detectAndLogChanges(existingState: SessionState, nextState: SessionState) {
+  const storeId = nextState.store?.id || existingState.store?.id || null;
+  if (!storeId) return;
+
+  const existingProducts = existingState.store?.products || [];
+  const nextProducts = nextState.store?.products || [];
+
+  for (const np of nextProducts) {
+    const ep = existingProducts.find((p) => p.id === np.id);
+    if (!ep) {
+      await logAuditEvent(storeId, "product_create", `Product '${np.name}' (ID: ${np.id}) was created.`);
+    } else {
+      if (ep.name !== np.name || ep.price !== np.price || ep.description !== np.description || ep.imageUrl !== np.imageUrl) {
+        await logAuditEvent(storeId, "product_update", `Product '${np.name}' (ID: ${np.id}) was updated.`);
+      }
+      if (ep.inStock !== np.inStock) {
+        await logAuditEvent(storeId, "product_stock_change", `Product '${np.name}' stock status changed to: ${np.inStock ? "In Stock" : "Out of Stock"}.`);
+      }
+      if (ep.deleted !== np.deleted && np.deleted) {
+        await logAuditEvent(storeId, "product_delete", `Product '${np.name}' (ID: ${np.id}) was deleted.`);
+      }
+    }
+  }
+
+  const eb = existingState.draft || {};
+  const nb = nextState.draft || {};
+  if (eb.accountNumber !== nb.accountNumber || eb.bankName !== nb.bankName) {
+    await logAuditEvent(storeId, "bank_verification_change", `Bank details updated to ${nb.bankName || "none"} - ${nb.accountNumber || "none"}`);
+  }
+
+  const existingOrders = existingState.orders || [];
+  const nextOrders = nextState.orders || [];
+  for (const no of nextOrders) {
+    const eo = existingOrders.find((o) => o.id === no.id);
+    if (eo && eo.status !== no.status) {
+      await logAuditEvent(storeId, "order_status_change", `Order ${no.reference} status changed from ${eo.status} to ${no.status}`);
+    }
+  }
+
+  const existingPayouts = existingState.payouts || [];
+  const nextPayouts = nextState.payouts || [];
+  for (const np of nextPayouts) {
+    const ep = existingPayouts.find((p) => p.id === np.id);
+    if (!ep) {
+      await logAuditEvent(storeId, "payout_request_created", `Payout requested for ${np.amount} NGN (Kora Ref: ${np.koraReference || "none"})`);
+    } else if (ep.status !== np.status) {
+      await logAuditEvent(storeId, "payout_status_change", `Payout ${np.koraReference} status changed from ${ep.status} to ${np.status}`);
+    }
+  }
+
+  const existingActivity = existingState.activity || [];
+  const nextActivity = nextState.activity || [];
+  if (nextActivity.length > existingActivity.length) {
+    const added = nextActivity.slice(0, nextActivity.length - existingActivity.length);
+    for (const act of added) {
+      if (act.toLowerCase().includes("ai") || act.toLowerCase().includes("applied")) {
+        await logAuditEvent(storeId, "ai_refinement", act);
+      }
+    }
+  }
+}
+
 export async function persistSessionState(state: SessionState) {
   await ensureSchema();
   const cookieStore = await cookies();
@@ -208,6 +271,9 @@ export async function persistSessionState(state: SessionState) {
   if (authToken) {
     const merchantSession = await findSession(authToken);
     if (merchantSession?.kind === "merchant" && merchantSession.merchant_id && merchantSession.store_id) {
+      const existingState = normalizeSessionState(merchantSession.state_json);
+      await detectAndLogChanges(existingState, nextState);
+
       await pool.query(
         `UPDATE sessions
          SET state_json = $2::jsonb, updated_at = NOW(), expires_at = NOW() + INTERVAL '30 days'

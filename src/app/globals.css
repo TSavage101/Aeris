@@ -160,7 +160,7 @@ hr,
 
 .app-page {
   min-height: 100vh;
-  animation: page-in 400ms var(--ease-snap);
+  animation: fade-in 400ms var(--ease-snap);
 }
 
 .container {
@@ -945,6 +945,37 @@ textarea.field-input {
   --store-primary: var(--color-forest);
 }
 
+.storefront-page h1,
+.storefront-page h2,
+.storefront-page h3,
+.storefront-page .store-nav strong {
+  color: var(--store-primary);
+}
+
+.storefront-page .btn-primary {
+  border-color: var(--store-primary);
+  background: var(--store-primary);
+}
+
+.storefront-page .btn-primary:hover {
+  background: var(--color-paper);
+  color: var(--store-primary);
+}
+
+.storefront-page .btn-ghost {
+  border-color: var(--store-primary);
+  color: var(--store-primary);
+}
+
+.storefront-page .btn-ghost:hover {
+  background: var(--store-primary);
+  color: var(--color-white);
+}
+
+.storefront-page .store-hero {
+  border-bottom-color: var(--store-primary);
+}
+
 .store-nav {
   position: sticky;
   top: 0;
@@ -1148,6 +1179,45 @@ textarea.field-input {
   height: 1px;
   opacity: 0;
   pointer-events: none;
+}
+
+.asset-upload-wrapper {
+  position: relative;
+}
+
+.asset-upload-loader {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  background: rgba(247, 247, 245, 0.82);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.upload-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--color-grid-20);
+  border-top-color: var(--color-forest);
+  border-radius: 50%;
+  animation: upload-spin 700ms linear infinite;
+}
+
+.upload-spinner-label {
+  margin-top: 8px;
+  color: var(--color-forest);
+  font-family: var(--font-mono);
+  font-size: var(--text-10);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+@keyframes upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .editor-note {
@@ -1417,6 +1487,15 @@ textarea.field-input {
   place-items: center;
   border: var(--border-hair);
   text-align: center;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes page-in {

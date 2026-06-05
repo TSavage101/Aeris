@@ -883,69 +883,124 @@ function Onboarding({ state, update, go }: CommonProps) {
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState<"manual" | "bulk">("manual");
   const draft = state.draft;
-  const draftRows = useMemo(() => parseDraftProductRows(draft.productsText), [draft.productsText]);
-  const parsedProducts = useMemo(() => draftRowsToProducts(draftRows), [draftRows]);
+  const [manualRows, setManualRows] = useState<DraftProductRow[]>(() => {
+    const parsed = parseDraftProductRows(draft.productsText);
+    return parsed.length > 0 ? parsed : seedRows(draft.category);
+  });
+  const [uploadingFields, setUploadingFields] = useState<Set<string>>(new Set());
+
+  const [resolvingBank, setResolvingBank] = useState(false);
+  const [bankError, setBankError] = useState("");
+  const [bankVerified, setBankVerified] = useState(false);
+
+  useEffect(() => {
+    if (draft.accountNumber.length === 10 && draft.bankName) {
+      let cancelled = false;
+      setResolvingBank(true);
+      setBankError("");
+      setBankVerified(false);
+
+      void (async () => {
+        try {
+          const response = await fetch("/api/kora/bank-resolve", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              bankName: draft.bankName,
+              accountNumber: draft.accountNumber
+            })
+          });
+
+          if (cancelled) return;
+
+          const data = await response.json() as { accountName?: string; error?: string };
+          if (!response.ok || data.error) {
+            setBankError(data.error || "Verification failed");
+          } else if (data.accountName) {
+            update((current) => ({
+              ...current,
+              draft: { ...current.draft, accountName: data.accountName! }
+            }));
+            setBankVerified(true);
+          }
+        } catch (err) {
+          if (!cancelled) {
+            setBankError("Network error or connection timed out");
+          }
+        } finally {
+          if (!cancelled) {
+            setResolvingBank(false);
+          }
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    } else {
+      setBankVerified(false);
+      setBankError("");
+    }
+  }, [draft.accountNumber, draft.bankName, update]);
+
+  const parsedProducts = useMemo(() => {
+    if (mode === "manual") return draftRowsToProducts(manualRows);
+    return draftRowsToProducts(parseDraftProductRows(draft.productsText));
+  }, [mode, manualRows, draft.productsText]);
   const progress = (step / 5) * 100;
 
   function setDraft(patch: Partial<Draft>) {
     update((current) => ({ ...current, draft: { ...current.draft, ...patch } }));
   }
 
-  function setDraftRows(rows: DraftProductRow[]) {
-    setDraft({ productsText: serializeDraftProductRows(rows) });
+  function syncManualRowsToDraft() {
+    setDraft({ productsText: serializeDraftProductRows(manualRows) });
   }
 
   function updateProductRow(index: number, patch: Partial<DraftProductRow>) {
-    const rows = draftRows.map((row) => ({ ...row }));
-    rows[index] = { ...rows[index], ...patch };
-    setDraftRows(rows);
+    setManualRows((cur) => cur.map((row, i) => i === index ? { ...row, ...patch } : row));
   }
 
   function addProductRow() {
-    if (draftRows.length >= 10) {
-      return;
-    }
-
-    setDraftRows([...draftRows, { name: "", price: "", description: "", imageUrl: "" }]);
+    if (manualRows.length >= 10) return;
+    setManualRows((cur) => [...cur, { name: "", price: "", description: "", imageUrl: "" }]);
   }
 
   function removeProductRow(index: number) {
-    if (draftRows.length <= 1) {
-      return;
-    }
+    if (manualRows.length <= 1) return;
+    setManualRows((cur) => cur.filter((_, i) => i !== index));
+  }
 
-    setDraftRows(draftRows.filter((_, productIndex) => productIndex !== index));
+  function markUploading(fid: string, on: boolean) {
+    setUploadingFields((c) => { const n = new Set(c); if (on) n.add(fid); else n.delete(fid); return n; });
   }
 
   async function attachProductImage(index: number, file?: File | null) {
-    if (!file) {
-      return;
-    }
-
-    updateProductRow(index, { imageUrl: await uploadImageAsset(file, "aeris/products") });
+    if (!file) return;
+    const fid = `p-img-${index}`;
+    markUploading(fid, true);
+    try { updateProductRow(index, { imageUrl: await uploadImageAsset(file, "aeris/products") }); } finally { markUploading(fid, false); }
   }
 
   async function attachBrandAsset(kind: "logoUrl" | "heroImageUrl", file?: File | null) {
-    if (!file) {
-      return;
-    }
-
-    setDraft({ [kind]: await uploadImageAsset(file, kind === "logoUrl" ? "aeris/drafts/logo" : "aeris/drafts/hero") } as Partial<Draft>);
+    if (!file) return;
+    const fid = kind === "logoUrl" ? "draft-logo" : "draft-hero";
+    markUploading(fid, true);
+    try { setDraft({ [kind]: await uploadImageAsset(file, kind === "logoUrl" ? "aeris/drafts/logo" : "aeris/drafts/hero") } as Partial<Draft>); } finally { markUploading(fid, false); }
   }
 
   useEffect(() => {
-    if (step === 3 && draftRows.length === 0) {
-      setDraftRows(seedRows(draft.category));
+    if (step === 3 && manualRows.length === 0) {
+      setManualRows(seedRows(draft.category));
     }
-  }, [draft.category, draftRows.length, step]);
+  }, [draft.category, manualRows.length, step]);
 
   function next() {
-    if (step < 5) {
-      setStep(step + 1);
-      return;
-    }
-    const store = buildStore(draft);
-    update((current) => ({ ...current, store, activity: [`Generated draft for ${store.name}`, ...current.activity] }));
+    if (mode === "manual") syncManualRowsToDraft();
+    if (step < 5) { setStep(step + 1); return; }
+    const syncedDraft = { ...draft, productsText: serializeDraftProductRows(manualRows) };
+    const store = buildStore(syncedDraft);
+    update((current) => ({ ...current, draft: syncedDraft, store, activity: [`Generated draft for ${store.name}`, ...current.activity] }));
     go("/onboarding/generating");
   }
 
@@ -970,8 +1025,8 @@ function Onboarding({ state, update, go }: CommonProps) {
             <Select id="category" label="Business category" value={draft.category} placeholder="Choose a category" onChange={(category) => setDraft({ category })} options={["Fashion", "Electronics", "Food & Groceries", "Beauty & Health", "Home & Living", "Sports & Fitness", "Books & Stationery", "Other"]} />
             <Select id="city" label="Supported city" value={draft.city} placeholder="Choose a supported city" onChange={(city) => setDraft({ city: city as SupportedCity })} options={[...SUPPORTED_CITIES]} />
             <Area id="description" label="Short business description" value={draft.description} placeholder="We deliver fresh groceries and ready-to-cook essentials across Lagos." onChange={(description) => setDraft({ description })} rows={4} />
-            <AssetUploadField id="draft-logo" label="Store logo upload" hint="Upload an optional logo for your storefront navigation." onFileSelect={(file) => void attachBrandAsset("logoUrl", file)} />
-            <AssetUploadField id="draft-hero" label="Hero image upload" hint="Upload optional hero art for your storefront landing section." onFileSelect={(file) => void attachBrandAsset("heroImageUrl", file)} />
+            <AssetUploadField id="draft-logo" label="Store logo upload" hint="Upload an optional logo for your storefront navigation." uploading={uploadingFields.has("draft-logo")} onFileSelect={(file) => void attachBrandAsset("logoUrl", file)} />
+            <AssetUploadField id="draft-hero" label="Hero image upload" hint="Upload optional hero art for your storefront landing section." uploading={uploadingFields.has("draft-hero")} onFileSelect={(file) => void attachBrandAsset("heroImageUrl", file)} />
             <div className="row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
               {draft.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${draft.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
               {draft.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${draft.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
@@ -986,11 +1041,14 @@ function Onboarding({ state, update, go }: CommonProps) {
           <h2>Where should we send your money?</h2>
           <div className="field-stack">
             <Select id="bank" label="Bank name" value={draft.bankName} placeholder="Select your bank" onChange={(bankName) => setDraft({ bankName })} options={["Access Bank", "GTBank", "Zenith Bank", "UBA", "First Bank"]} />
-            <Field id="account-number" label="Account number" value={draft.accountNumber} placeholder="0123456789" onChange={(accountNumber) => setDraft({ accountNumber: accountNumber.replace(/\D/g, "").slice(0, 10), accountName: accountNumber.length >= 9 ? draft.accountName : "" })} />
-            <Field id="account-name" label="Account name" value={draft.accountNumber.length === 10 ? draft.accountName || "Verified account name" : ""} placeholder="Verified account name appears here" onChange={(accountName) => setDraft({ accountName })} readOnly={draft.accountNumber.length === 10} />
-            {draft.accountNumber.length === 10 ? <StatusBadge>Account verified</StatusBadge> : <span className="label">Enter 10 digits to verify account...</span>}
+            <Field id="account-number" label="Account number" value={draft.accountNumber} placeholder="0123456789" onChange={(accountNumber) => setDraft({ accountNumber: accountNumber.replace(/\D/g, "").slice(0, 10) })} />
+            <Field id="account-name" label="Account name" value={draft.accountName} placeholder="Verified account name appears here" onChange={(accountName) => setDraft({ accountName })} readOnly={true} />
+            {resolvingBank && <span className="label text-muted">Verifying account with Kora...</span>}
+            {bankError && <span className="label form-error">✕ {bankError}</span>}
+            {bankVerified && <StatusBadge>Account verified: {draft.accountName}</StatusBadge>}
+            {!resolvingBank && !bankError && !bankVerified && <span className="label">Enter 10 digits to verify account...</span>}
           </div>
-          <button className="btn-primary" onClick={next} disabled={draft.accountNumber.length !== 10}>Next step</button>
+          <button className="btn-primary" onClick={next} disabled={!bankVerified || resolvingBank}>Next step</button>
         </div>
       )}
       {step === 3 && (
@@ -1015,7 +1073,7 @@ function Onboarding({ state, update, go }: CommonProps) {
             </>
           ) : (
             <div className="field-stack">
-              {draftRows.map((product, index) => (
+              {manualRows.map((product, index) => (
                 <div className="product-entry" key={index}>
                   <div className="product-entry-fields">
                     <Field id={`p-name-${index}`} label="Product name" value={product.name} placeholder="Smoked Jollof Party Tray" onChange={(name) => updateProductRow(index, { name })} />
@@ -1023,19 +1081,19 @@ function Onboarding({ state, update, go }: CommonProps) {
                     <Field id={`p-desc-${index}`} label="Description" value={product.description || ""} placeholder="Family-size smoky jollof rice with fried plantain." onChange={(description) => updateProductRow(index, { description })} />
                   </div>
                   <div className="field product-image-field">
-                    <AssetUploadField id={`p-img-${index}`} label="Product image" hint="Choose a product image for this storefront listing." onFileSelect={(file) => void attachProductImage(index, file)} />
+                    <AssetUploadField id={`p-img-${index}`} label="Product image" hint="Choose a product image for this storefront listing." uploading={uploadingFields.has(`p-img-${index}`)} onFileSelect={(file) => void attachProductImage(index, file)} />
                     <div className="product-thumb-stack">
                       {product.imageUrl ? <div className="product-thumb-preview" style={{ backgroundImage: `url(${product.imageUrl})` }} /> : <div className="product-thumb-preview logo-preview-empty">IMAGE</div>}
                       {product.imageUrl ? <button className="btn-danger" type="button" onClick={() => updateProductRow(index, { imageUrl: "" })}>Remove image</button> : null}
                     </div>
                   </div>
-                  <button className="btn-danger product-entry-delete" type="button" aria-label="Delete product" disabled={draftRows.length <= 1} onClick={() => removeProductRow(index)}>Remove</button>
+                  <button className="btn-danger product-entry-delete" type="button" aria-label="Delete product" disabled={manualRows.length <= 1} onClick={() => removeProductRow(index)}>Remove</button>
                 </div>
               ))}
-              <button className="btn-ghost" type="button" onClick={addProductRow} disabled={draftRows.length >= 10}>
+              <button className="btn-ghost" type="button" onClick={addProductRow} disabled={manualRows.length >= 10}>
                 + Add product
               </button>
-              {draftRows.length >= 10 && <span className="label">Maximum 10 products</span>}
+              {manualRows.length >= 10 && <span className="label">Maximum 10 products</span>}
             </div>
           )}
           <button className="btn-primary" onClick={next} disabled={parsedProducts.length < 1}>Next step</button>
@@ -1164,7 +1222,7 @@ function MiniStorePreview({ draft }: { draft: Draft }) {
   return (
     <div className="store-card" style={{ padding: 24 }}>
       <span className="label">Live preview</span>
-      <h3>{draft.storeName || "Your store name"}</h3>
+      <h3 style={{ color: draft.primary }}>{draft.storeName || "Your store name"}</h3>
       <p>{draft.tagline || "A polished storefront preview will appear here as you make your selections."}</p>
       <button className="btn-primary" style={{ background: draft.primary, borderColor: draft.primary }}>Shop now</button>
     </div>
@@ -1215,22 +1273,47 @@ function Generating({ go }: CommonProps) {
 }
 
 function Preview({ state, update, go, notify }: CommonProps) {
-  const products = state.store.products.filter((product) => !product.deleted);
   const [aiPrompt, setAiPrompt] = useState("");
-
+  const [previewStore, setPreviewStore] = useState<Store>(state.store);
+  const previewProducts = previewStore.products.filter((p) => !p.deleted);
+  const [uploadingFields, setUploadingFields] = useState<Set<string>>(new Set());
+  const [isRunning, setIsRunning] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(true);
+  const defaultSteps: AiTraceStep[] = [
+    { title: "Sending store context to Aeris AI", summary: "Preparing the current storefront draft, theme, and prompt for review." },
+    { title: "Waiting for model response", summary: "OpenAI is preparing a structured storefront patch for the draft store." },
+    { title: "Checking safe design controls", summary: "Limiting the response to supported storefront settings so the preview stays stable." },
+    { title: "Preparing preview-ready draft", summary: "The resulting patch will be staged for review before anything is applied live." }
+  ];
+  const [stepStatuses, setStepStatuses] = useState<ThoughtStepStatus[]>(["pending","pending","pending","pending"]);
+  const [traceSteps, setTraceSteps] = useState<AiTraceStep[]>(defaultSteps);
+  const [aiSummary, setAiSummary] = useState<string[]>([]);
+  useEffect(() => { setPreviewStore(state.store); }, [state.store]);
+  function markUploading(fid: string, on: boolean) { setUploadingFields((c) => { const n = new Set(c); if (on) n.add(fid); else n.delete(fid); return n; }); }
   async function attachPreviewAsset(kind: "logoUrl" | "heroImageUrl", file?: File | null) {
-    if (!file) {
-      return;
-    }
-
-    const assetUrl = await uploadImageAsset(file, kind === "logoUrl" ? "aeris/preview/logo" : "aeris/preview/hero");
-    update((current) => ({
-      ...current,
-      draft: { ...current.draft, [kind]: assetUrl },
-      store: { ...current.store, [kind]: assetUrl }
-    }));
+    if (!file) return;
+    const fid = kind === "logoUrl" ? "preview-logo" : "preview-hero";
+    markUploading(fid, true);
+    try { const url = await uploadImageAsset(file, kind === "logoUrl" ? "aeris/preview/logo" : "aeris/preview/hero"); update((c) => ({ ...c, draft: { ...c.draft, [kind]: url }, store: { ...c.store, [kind]: url } })); } finally { markUploading(fid, false); }
   }
-
+  async function runAiDraft() {
+    if (!aiPrompt.trim()) { notify("Enter a prompt describing the changes you want"); return; }
+    setIsRunning(true); setIsReady(false); setTraceOpen(true); setAiSummary([]);
+    setStepStatuses(["active","pending","pending","pending"]); setTraceSteps([...defaultSteps]);
+    try {
+      const result = await requestStoreEdit(state.store, aiPrompt);
+      const steps = (result.steps.length ? result.steps : traceSteps).slice(0, 4);
+      setTraceSteps(steps); setPreviewStore(mergeStorePatch(state.store, result.patch)); setAiSummary(result.summary);
+      for (let i = 0; i < steps.length; i++) { setStepStatuses(steps.map((_, si) => si < i ? "completed" : si === i ? "active" : "pending")); await new Promise((r) => setTimeout(r, 650)); }
+      setStepStatuses(steps.map(() => "completed")); setIsRunning(false); setIsReady(true);
+    } catch (err) { setStepStatuses((c) => c.map((s, i) => i === 0 && s === "active" ? "error" : s)); setIsRunning(false); setIsReady(false); notify(err instanceof Error ? err.message : "Unable to generate AI draft changes"); }
+  }
+  function applyAiChanges() {
+    update((c) => ({ ...c, draft: { ...c.draft, tagline: previewStore.heroCopy, logoUrl: previewStore.logoUrl || "", heroImageUrl: previewStore.heroImageUrl || "" }, store: previewStore, activity: [`AI refined: ${aiPrompt}`, ...c.activity] }));
+    setIsReady(false); setAiSummary([]); notify("AI changes applied to preview");
+  }
+  function discardAiChanges() { setPreviewStore(state.store); setIsReady(false); setAiSummary([]); setTraceOpen(true); setStepStatuses(["pending","pending","pending","pending"]); notify("AI changes discarded"); }
   return (
     <div className="preview-shell">
       <aside className="preview-sidebar">
@@ -1238,31 +1321,24 @@ function Preview({ state, update, go, notify }: CommonProps) {
         <p className="mono" style={{ fontSize: 11, marginTop: 16 }}>AI draft - not yet published</p>
         <hr />
         <h3>Store info</h3>
-        <Field id="preview-name" label="Store name" value={state.store.name} onChange={(name) => update((current) => ({ ...current, draft: { ...current.draft, storeName: name }, store: { ...current.store, name } }))} />
-        <Field id="preview-tagline" label="Store tagline" value={state.store.heroCopy} placeholder="Fast delivery for busy households across Lagos." onChange={(heroCopy) => update((current) => ({ ...current, draft: { ...current.draft, tagline: heroCopy }, store: { ...current.store, heroCopy } }))} />
-        <AssetUploadField id="preview-logo" label="Store logo upload" hint="Change or confirm the logo shown in storefront navigation." onFileSelect={(file) => void attachPreviewAsset("logoUrl", file)} />
-        <AssetUploadField id="preview-hero" label="Hero image upload" hint="Change or confirm the hero image shown behind the storefront headline." onFileSelect={(file) => void attachPreviewAsset("heroImageUrl", file)} />
+        <Field id="preview-name" label="Store name" value={state.store.name} onChange={(name) => update((c) => ({ ...c, draft: { ...c.draft, storeName: name }, store: { ...c.store, name } }))} />
+        <Field id="preview-tagline" label="Store tagline" value={state.store.heroCopy} placeholder="Fast delivery for busy households across Lagos." onChange={(heroCopy) => update((c) => ({ ...c, draft: { ...c.draft, tagline: heroCopy }, store: { ...c.store, heroCopy } }))} />
+        <AssetUploadField id="preview-logo" label="Store logo upload" hint="Change or confirm the logo shown in storefront navigation." uploading={uploadingFields.has("preview-logo")} onFileSelect={(file) => void attachPreviewAsset("logoUrl", file)} />
+        <AssetUploadField id="preview-hero" label="Hero image upload" hint="Change or confirm the hero image shown behind the storefront headline." uploading={uploadingFields.has("preview-hero")} onFileSelect={(file) => void attachPreviewAsset("heroImageUrl", file)} />
         <div className="preview-asset-row">
-          <div className="asset-preview-stack">
-            <span className="field-label">Store logo</span>
-            {state.store.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${state.store.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
-          </div>
-          <div className="asset-preview-stack">
-            <span className="field-label">Hero image</span>
-            {state.store.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${state.store.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}
-          </div>
+          <div className="asset-preview-stack"><span className="field-label">Store logo</span>{state.store.logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${state.store.logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}</div>
+          <div className="asset-preview-stack"><span className="field-label">Hero image</span>{state.store.heroImageUrl ? <div className="hero-preview-thumb" style={{ backgroundImage: `url(${state.store.heroImageUrl})` }} /> : <div className="hero-preview-thumb logo-preview-empty">HERO</div>}</div>
         </div>
         <Area id="ai" label="AI refinement" rows={4} value={aiPrompt} placeholder="Ask Aeris to warm the homepage copy or change the hero direction." onChange={setAiPrompt} />
-        <button className="btn-primary" style={{ width: "100%" }} onClick={() => notify("Proposed AI changes ready for review")}>Apply changes</button>
-        <button className="btn-ghost" style={{ width: "100%", marginTop: 8 }} onClick={() => notify("Changes discarded")}>Discard</button>
+        <button className="btn-primary" style={{ width: "100%" }} disabled={isRunning || !aiPrompt.trim()} onClick={() => void runAiDraft()}>{isRunning ? "AI is thinking..." : "Apply changes"}</button>
+        {(isRunning || isReady) && <ChainOfThoughtCard steps={traceSteps} statuses={stepStatuses} running={isRunning} ready={isReady} open={traceOpen} onToggle={() => setTraceOpen((c) => !c)} />}
+        {isReady && (<div className="form-card" style={{ marginTop: 24, padding: 24 }}><span className="label">Proposed changes</span><div className="editor-summary-list">{aiSummary.map((item) => (<p className="editor-note" key={item}>{item}</p>))}</div><div className="row" style={{ flexWrap: "wrap" }}><button className="btn-primary" onClick={applyAiChanges}>Apply to preview</button><button className="btn-ghost" onClick={discardAiChanges}>Discard</button></div></div>)}
+        {!isRunning && !isReady && <button className="btn-ghost" style={{ width: "100%", marginTop: 8 }} onClick={discardAiChanges}>Discard</button>}
       </aside>
       <main className="preview-main">
         <span className="preview-badge status-badge"><span className="status-dot" />Preview draft</span>
-        <StorefrontRenderer store={state.store} products={products} cart={state.cart} addToCart={() => undefined} preview />
-        <div className="bottom-bar">
-          <button className="btn-ghost" onClick={() => go("/onboarding")}>Back to editor</button>
-          <button className="btn-primary" onClick={() => go("/claim")}>Claim and publish</button>
-        </div>
+        <StorefrontRenderer store={previewStore} products={previewProducts} cart={state.cart} addToCart={() => undefined} preview />
+        <div className="bottom-bar"><button className="btn-ghost" onClick={() => go("/onboarding")}>Back to editor</button><button className="btn-primary" onClick={() => go("/claim")}>Claim and publish</button></div>
       </main>
     </div>
   );
@@ -1620,7 +1696,7 @@ function StoreEditorPage({ state, update, go, notify }: CommonProps) {
   }
 
   return (
-    <div className="editor-shell page-with-nav-gap">
+    <div className="editor-shell">
       <aside className="preview-sidebar">
         <span className="label">Live store AI editor</span>
         <h2 style={{ marginTop: 12 }}>Draft changes before you republish.</h2>
@@ -1749,12 +1825,14 @@ function ProductEditorPage({ state, update, go, notify, mode }: CommonProps & { 
     setInStock(existing?.inStock ?? true);
   }, [existing]);
 
-  async function uploadImage(file?: File | null) {
-    if (!file) {
-      return;
-    }
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
-    setImageUrl(await uploadImageAsset(file, "aeris/products"));
+  async function uploadImage(file?: File | null) {
+    if (!file) { return; }
+    setIsUploadingImage(true);
+    try {
+      setImageUrl(await uploadImageAsset(file, "aeris/products"));
+    } finally { setIsUploadingImage(false); }
   }
 
   function saveProduct() {
@@ -1813,7 +1891,7 @@ function ProductEditorPage({ state, update, go, notify, mode }: CommonProps & { 
             <Field id="product-name" label="Product name" value={name} placeholder="Smoked Jollof Party Tray" onChange={setName} />
             <Field id="product-price" label="Price (NGN)" value={price} placeholder="18500" onChange={setPrice} />
             <Area id="product-description" label="Description" rows={6} placeholder="Describe the product shoppers will receive." value={description} onChange={setDescription} />
-            <AssetUploadField id="product-image" label="Product image upload" hint="Upload the product image shoppers will see on the storefront." onFileSelect={(file) => void uploadImage(file)} />
+            <AssetUploadField id="product-image" label="Product image upload" hint="Upload the product image shoppers will see on the storefront." uploading={isUploadingImage} onFileSelect={(file) => void uploadImage(file)} />
             <div className="row" style={{ alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap" }}>
               {imageUrl ? <div className="product-image-preview" style={{ backgroundImage: `url(${imageUrl})` }} /> : <div className="product-image-preview logo-preview-empty">IMAGE</div>}
               {imageUrl ? <button className="btn-danger" onClick={() => setImageUrl("")}>Remove image</button> : null}
@@ -1962,17 +2040,19 @@ function SettingsManager({ state, update, notify, go }: { state: State; update: 
     setHeroImageUrl(state.store.heroImageUrl || "");
   }, [state.store]);
 
-  async function uploadAsset(kind: "logo" | "hero", file?: File | null) {
-    if (!file) {
-      return;
-    }
+  const [uploadingFields, setUploadingFields] = useState<Set<string>>(new Set());
 
-    const dataUrl = await uploadImageAsset(file, kind === "logo" ? "aeris/brand/logo" : "aeris/brand/hero");
-    if (kind === "logo") {
-      setLogoUrl(dataUrl);
-      return;
+  async function uploadAsset(kind: "logo" | "hero", file?: File | null) {
+    if (!file) { return; }
+    const fid = kind === "logo" ? "settings-logo" : "settings-hero-image";
+    setUploadingFields((c) => { const n = new Set(c); n.add(fid); return n; });
+    try {
+      const dataUrl = await uploadImageAsset(file, kind === "logo" ? "aeris/brand/logo" : "aeris/brand/hero");
+      if (kind === "logo") { setLogoUrl(dataUrl); return; }
+      setHeroImageUrl(dataUrl);
+    } finally {
+      setUploadingFields((c) => { const n = new Set(c); n.delete(fid); return n; });
     }
-    setHeroImageUrl(dataUrl);
   }
 
   function saveSettings() {
@@ -2021,8 +2101,8 @@ function SettingsManager({ state, update, notify, go }: { state: State; update: 
         {locked ? <span className="chip gold">Store settings are locked while published</span> : null}
         <Field id="settings-name" label="Store name" value={storeName} onChange={setStoreName} readOnly={locked} disabled={locked} />
         <Field id="settings-tagline" label="Tagline" value={tagline} onChange={setTagline} readOnly={locked} disabled={locked} />
-        <AssetUploadField id="settings-logo" label="Store logo upload" hint="Upload the logo shown in your storefront navigation." disabled={locked} onFileSelect={(file) => void uploadAsset("logo", file)} />
-        <AssetUploadField id="settings-hero-image" label="Hero background image upload" hint="Upload the background art used behind the storefront hero." disabled={locked} onFileSelect={(file) => void uploadAsset("hero", file)} />
+        <AssetUploadField id="settings-logo" label="Store logo upload" hint="Upload the logo shown in your storefront navigation." disabled={locked} uploading={uploadingFields.has("settings-logo")} onFileSelect={(file) => void uploadAsset("logo", file)} />
+        <AssetUploadField id="settings-hero-image" label="Hero background image upload" hint="Upload the background art used behind the storefront hero." disabled={locked} uploading={uploadingFields.has("settings-hero-image")} onFileSelect={(file) => void uploadAsset("hero", file)} />
         <div className="row" style={{ alignItems: "flex-start" }}>
           <div className="asset-preview-stack">
             {logoUrl ? <div className="logo-preview" style={{ backgroundImage: `url(${logoUrl})` }} /> : <div className="logo-preview logo-preview-empty">LOGO</div>}
@@ -2056,15 +2136,18 @@ function SettingsManager({ state, update, notify, go }: { state: State; update: 
   );
 }
 
-function AssetUploadField({ id, label, hint, onFileSelect, disabled }: { id: string; label: string; hint: string; onFileSelect: (file?: File | null) => void; disabled?: boolean }) {
+function AssetUploadField({ id, label, hint, onFileSelect, disabled, uploading }: { id: string; label: string; hint: string; onFileSelect: (file?: File | null) => void; disabled?: boolean; uploading?: boolean }) {
   return (
     <div className="field">
       <label className="field-label" htmlFor={id}>{label}</label>
-      <label className={`asset-upload ${disabled ? "asset-upload-disabled" : ""}`} htmlFor={id}>
-        <span className="asset-upload-copy">Choose image</span>
-        <span className="asset-upload-hint">{hint}</span>
-      </label>
-      <input disabled={disabled} id={id} className="asset-upload-input" type="file" accept="image/*" onChange={(event) => onFileSelect(event.target.files?.[0])} />
+      <div className="asset-upload-wrapper">
+        <label className={`asset-upload ${disabled ? "asset-upload-disabled" : ""}`} htmlFor={id}>
+          <span className="asset-upload-copy">{uploading ? "Uploading..." : "Choose image"}</span>
+          <span className="asset-upload-hint">{hint}</span>
+        </label>
+        {uploading && (<div className="asset-upload-loader"><div><div className="upload-spinner" /><div className="upload-spinner-label">Uploading</div></div></div>)}
+      </div>
+      <input disabled={disabled || uploading} id={id} className="asset-upload-input" type="file" accept="image/*" onChange={(event) => onFileSelect(event.target.files?.[0])} />
     </div>
   );
 }
@@ -2103,15 +2186,15 @@ function StorefrontRenderer({ store, products, cart, addToCart, go, preview }: {
     }
   }, [searching, searchQuery]);
 
-  if (!preview && !store.published) {
-    return <main className="storefront-page store-hero"><div><h2>{store.name}</h2><StatusBadge>Temporarily unavailable</StatusBadge><p>This store is currently unavailable. Please check back soon.</p><span className="label">Powered by Aeris</span></div></main>;
+  if (!preview && (!store.published || store.suspended)) {
+    return <main className="storefront-page store-hero"><div><h2>{store.name}</h2><StatusBadge>{store.suspended ? "Suspended" : "Temporarily unavailable"}</StatusBadge><p>{store.suspended ? "This store has been temporarily suspended by the platform administrator." : "This store is currently unavailable. Please check back soon."}</p><span className="label">Powered by Aeris</span></div></main>;
   }
   return (
     <main className="storefront-page" style={{ "--store-primary": store.theme.primary, "--store-product-radius": `${store.theme.productRadius}px` } as CSSProperties}>
       <nav className="store-nav">
         <div className={`store-brand ${store.theme.navAlignment === "center" ? "store-brand-center" : ""}`}>
           {store.logoUrl ? <div className="store-logo" style={{ backgroundImage: `url(${store.logoUrl})` }} /> : null}
-          <strong style={{ fontFamily: "var(--font-display)", color: "var(--color-forest)" }}>{store.name}</strong>
+          <strong style={{ fontFamily: "var(--font-display)" }}>{store.name}</strong>
         </div>
         <div className="row">
           <input className="store-search-input" aria-label="Search products" placeholder="Search products" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} />
