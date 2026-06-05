@@ -6,3 +6,7 @@ dist/
 coverage/
 .playwright-cli/
 output/
+.codex/
+.logs/
+.local-postgres/
+tsconfig.tsbuildinfo
