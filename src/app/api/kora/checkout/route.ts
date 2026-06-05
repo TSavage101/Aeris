@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { koraRequest } from "@/lib/server/kora";
+import { AUTH_COOKIE, GUEST_COOKIE } from "@/lib/server/session";
+import { persistCheckoutSession } from "@/lib/server/payments";
+import type { CheckoutDetails } from "@/lib/aeris";
 
 export async function POST(request: Request) {
   try {
@@ -7,6 +11,16 @@ export async function POST(request: Request) {
       reference: string;
       amount: number;
       customer: { name: string; email: string };
+      store: { id: string; slug: string };
+      cart: Array<{ productId: string; name: string; quantity: number; unitPrice: number }>;
+      delivery: CheckoutDetails;
+      totals: {
+        subtotal: number;
+        logisticsFee: number;
+        platformFee: number;
+        merchantEarnings: number;
+        total: number;
+      };
       metadata?: Record<string, string>;
     };
 
@@ -21,6 +35,25 @@ export async function POST(request: Request) {
         notification_url: `${appUrl}/api/kora/webhook`,
         metadata: body.metadata
       })
+    });
+
+    const cookieStore = await cookies();
+    const guestToken = cookieStore.get(GUEST_COOKIE)?.value || cookieStore.get(AUTH_COOKIE)?.value || null;
+    await persistCheckoutSession({
+      reference: payload.data.reference,
+      guestToken,
+      snapshot: {
+        storeId: body.store.id,
+        storeSlug: body.store.slug,
+        cart: body.cart,
+        delivery: body.delivery,
+        subtotal: body.totals.subtotal,
+        logisticsFee: body.totals.logisticsFee,
+        platformFee: body.totals.platformFee,
+        merchantEarnings: body.totals.merchantEarnings,
+        total: body.totals.total,
+        customer: body.customer
+      }
     });
 
     return NextResponse.json({

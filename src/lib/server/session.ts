@@ -104,6 +104,25 @@ export async function findStoreByMerchantId(merchantId: string) {
   return rows[0] || null;
 }
 
+export async function findStoreByOrderReference(reference: string) {
+  await ensureSchema();
+  const pool = getPool();
+  const { rows } = await pool.query<StoreRow>(
+    `SELECT id, merchant_id, slug, owner_email, state_json
+     FROM stores`
+  );
+
+  for (const row of rows) {
+    const state = normalizeSessionState(row.state_json);
+    const order = state.orders.find((candidate) => candidate.reference === reference);
+    if (order) {
+      return { store: row, state, order };
+    }
+  }
+
+  return null;
+}
+
 export async function createGuestSession(initialState?: SessionState) {
   await ensureSchema();
   const token = createToken("guest");
@@ -164,6 +183,34 @@ export async function bootstrapStateForPath(pathname: string) {
   const ensuredGuest = guestSession
     ? { token: guestSession.token, state: normalizeSessionState(guestSession.state_json) }
     : await createGuestSession();
+
+  if (pathname.startsWith("/order/")) {
+    const orderReference = decodeURIComponent(pathname.split("/")[2] || "");
+    if (orderReference) {
+      const existingOrder = ensuredGuest.state.orders.find((candidate) => candidate.reference === orderReference);
+      if (existingOrder) {
+        return {
+          cookieName: GUEST_COOKIE,
+          cookieValue: ensuredGuest.token,
+          kind: "guest" as const,
+          state: ensuredGuest.state
+        };
+      }
+
+      const publicOrderStore = await findStoreByOrderReference(orderReference);
+      if (publicOrderStore) {
+        return {
+          cookieName: GUEST_COOKIE,
+          cookieValue: ensuredGuest.token,
+          kind: "guest" as const,
+          state: {
+            ...mergePublicStoreState(ensuredGuest.state, publicOrderStore.state),
+            orders: [publicOrderStore.order]
+          }
+        };
+      }
+    }
+  }
 
   if (pathname.startsWith("/s/")) {
     const slug = pathname.split("/")[2];

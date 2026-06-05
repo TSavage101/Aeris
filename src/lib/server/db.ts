@@ -66,10 +66,26 @@ export async function ensureSchema() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
+        CREATE TABLE IF NOT EXISTS checkout_sessions (
+          reference TEXT PRIMARY KEY,
+          guest_token TEXT,
+          store_id TEXT NOT NULL,
+          store_slug TEXT NOT NULL,
+          payload_json JSONB NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          raw_status TEXT,
+          order_reference TEXT,
+          processed_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
         CREATE INDEX IF NOT EXISTS idx_sessions_kind ON sessions(kind);
         CREATE INDEX IF NOT EXISTS idx_sessions_merchant_id ON sessions(merchant_id);
         CREATE INDEX IF NOT EXISTS idx_stores_slug ON stores(slug);
         CREATE INDEX IF NOT EXISTS idx_audit_logs_store_id ON audit_logs(store_id);
+        CREATE INDEX IF NOT EXISTS idx_checkout_sessions_store_slug ON checkout_sessions(store_slug);
+        CREATE INDEX IF NOT EXISTS idx_checkout_sessions_status ON checkout_sessions(status);
       `);
 
       const adminEmail = "admin@aeris.store";
@@ -86,4 +102,3 @@ export async function ensureSchema() {
 
   await global.__aerisSchemaReady;
 }
-

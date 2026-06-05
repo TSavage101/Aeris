@@ -457,6 +457,16 @@ async function createKoraCheckoutSession(input: {
   reference: string;
   amount: number;
   customer: { name: string; email: string };
+  store: { id: string; slug: string };
+  cart: Array<{ productId: string; name: string; quantity: number; unitPrice: number }>;
+  delivery: CheckoutDetails;
+  totals: {
+    subtotal: number;
+    logisticsFee: number;
+    platformFee: number;
+    merchantEarnings: number;
+    total: number;
+  };
   metadata: Record<string, string>;
 }) {
   const response = await fetch("/api/kora/checkout", {
@@ -482,7 +492,7 @@ async function verifyKoraCharge(reference: string) {
     throw new Error(payload?.error || "Unable to verify payment");
   }
 
-  return response.json() as Promise<{ status: string; rawStatus?: string; amount?: number; currency?: string }>;
+  return response.json() as Promise<{ status: string; rawStatus?: string; amount?: number; currency?: string; orderReference?: string }>;
 }
 
 async function requestKoraPayout(input: {
@@ -2640,43 +2650,24 @@ function CheckoutPage({ state, update, go, notify }: CommonProps) {
         }
 
         if (verification.status === "paid") {
-          const items = state.cart.map((line) => {
-            const product = state.store.products.find((candidate) => candidate.id === line.productId)!;
-            return { productId: product.id, name: product.name, quantity: line.quantity, unitPrice: product.price };
-          });
+          const orderReference = verification.orderReference;
+          if (!orderReference) {
+            setPaymentStatus("Payment confirmed. Finalizing your order...");
+            return;
+          }
 
-          const order: Order = {
-            id: cryptoId("order"),
-            reference: `AERIS_${Date.now().toString(36).toUpperCase()}`,
-            storeId: state.store.id,
-            koraReference: session.reference,
-            items,
-            subtotal: totals.subtotal,
-            logisticsFee: totals.logisticsFee,
-            platformFee: totals.platformFee,
-            merchantEarnings: totals.merchantEarnings,
-            status: "paid",
-            paymentState: "paid",
-            delivery: details,
-            createdAt: new Date().toISOString(),
-            payoutAllocated: 0
-          };
-
-          update((current) => {
-            const nextState = {
-              ...current,
-              cart: [],
-              orders: [order, ...current.orders],
-              activity: [`New paid order ${order.reference}`, ...current.activity]
-            };
-            persistState(nextState);
-            return nextState;
-          });
-
+          if (orderReference) {
+            try {
+              const refreshed = await bootstrapStateFromServer(`/order/${orderReference}`);
+              update(() => refreshed);
+            } catch {
+              // The order page can still resolve directly by reference after navigation.
+            }
+          }
           setCheckoutSession(null);
           setInitializing(false);
           notify("New order paid through Kora");
-          go(`/order/${order.reference}?success=1`);
+          go(`/order/${orderReference}?success=1`);
           return;
         }
 
@@ -2736,6 +2727,16 @@ function CheckoutPage({ state, update, go, notify }: CommonProps) {
           name: details.fullName,
           email: details.email?.trim() || `${state.store.slug}+checkout@aeris.store`
         },
+        store: {
+          id: state.store.id,
+          slug: state.store.slug
+        },
+        cart: state.cart.map((line) => {
+          const product = state.store.products.find((candidate) => candidate.id === line.productId)!;
+          return { productId: product.id, name: product.name, quantity: line.quantity, unitPrice: product.price };
+        }),
+        delivery: details,
+        totals,
         metadata: {
           storeSlug: state.store.slug,
           city: details.city
