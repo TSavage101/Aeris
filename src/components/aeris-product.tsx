@@ -809,7 +809,7 @@ function Landing({ state, update, go, notify }: CommonProps) {
             <button className="btn-primary" onClick={quickStartOnboarding}>
               Start building
             </button>
-            <button className="btn-ghost" onClick={() => go("/s/terra-basket")}>
+            <button className="btn-ghost" onClick={() => go("/s/terra-basket-demo")}>
               View demo
             </button>
             <button className="btn-ghost" onClick={() => go("/login")}>

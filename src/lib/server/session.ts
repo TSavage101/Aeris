@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { randomUUID } from "crypto";
 import type { SessionState } from "@/lib/server/state";
-import { buildInitialSessionState, mergePublicStoreState, normalizeSessionState, sanitizeStateForStorage } from "@/lib/server/state";
+import { buildDemoSessionState, buildInitialSessionState, mergePublicStoreState, normalizeSessionState, sanitizeStateForStorage } from "@/lib/server/state";
 import { ensureSchema, getPool } from "@/lib/server/db";
 
 export const AUTH_COOKIE = "aeris_auth_session";
@@ -167,7 +167,17 @@ export async function bootstrapStateForPath(pathname: string) {
   if (pathname.startsWith("/s/")) {
     const slug = pathname.split("/")[2];
     if (slug) {
-      const publicStore = await findStoreBySlug(decodeURIComponent(slug));
+      const decodedSlug = decodeURIComponent(slug);
+      if (decodedSlug === "terra-basket" || decodedSlug === "terra-basket-demo") {
+        return {
+          cookieName: GUEST_COOKIE,
+          cookieValue: ensuredGuest.token,
+          kind: "guest" as const,
+          state: mergePublicStoreState(ensuredGuest.state, buildDemoSessionState())
+        };
+      }
+
+      const publicStore = await findStoreBySlug(decodedSlug);
       if (publicStore) {
         return {
           cookieName: GUEST_COOKIE,
@@ -299,4 +309,3 @@ export async function upsertStoreRecord(input: {
     [input.storeId, input.merchantId, input.slug, input.ownerEmail, JSON.stringify(sanitizeStateForStorage(input.state))]
   );
 }
-

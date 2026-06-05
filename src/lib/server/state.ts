@@ -1,3 +1,4 @@
+import { makeProduct } from "@/lib/aeris";
 import type { CartLine, CheckoutDetails, Order, PayoutRequest, Store, SupportedCity } from "@/lib/aeris";
 
 export type Draft = {
@@ -75,6 +76,59 @@ function buildEmptyStore(): Store {
   };
 }
 
+function buildDemoStore(): Store {
+  return {
+    id: "store_demo_terra_basket",
+    slug: "terra-basket",
+    name: "Terra Basket",
+    city: "Lagos",
+    category: "Food & Groceries",
+    logoUrl: "",
+    heroImageUrl: "",
+    ownerEmail: "",
+    bankVerified: true,
+    published: true,
+    suspended: false,
+    theme: {
+      primary: "#1A3C2B",
+      secondary: "#FF8C69",
+      accent: "#9EFFBF",
+      template: "provisions",
+      navAlignment: "left",
+      productRadius: 0
+    },
+    heroTitle: "Fresh provisions, paid through Kora.",
+    heroCopy: "Fast pantry staples and family bundles delivered across Lagos.",
+    products: [
+      makeProduct(
+        {
+          name: "Jollof Tray",
+          price: 18500,
+          description: "A rich party tray prepared for family weekends and shared table orders."
+        },
+        0
+      ),
+      makeProduct(
+        {
+          name: "Palm Oil Set",
+          price: 14500,
+          description: "Kitchen-ready red oil, pantry staples, and cooking support for repeat buyers."
+        },
+        1
+      ),
+      makeProduct(
+        {
+          name: "Market Bundle",
+          price: 12500,
+          description: "A customer-friendly essentials pack that makes the demo store feel complete."
+        },
+        2,
+        "ai"
+      )
+    ]
+  };
+}
+
 export function buildInitialSessionState(leadEmail = ""): SessionState {
   return {
     draft: {
@@ -91,6 +145,14 @@ export function buildInitialSessionState(leadEmail = ""): SessionState {
       password: "",
       loggedIn: false
     }
+  };
+}
+
+export function buildDemoSessionState(): SessionState {
+  return {
+    ...buildInitialSessionState(),
+    store: buildDemoStore(),
+    activity: ["Demo storefront loaded"]
   };
 }
 
@@ -152,4 +214,3 @@ export type SessionBootstrapResult = {
   state: SessionState;
   kind: "guest" | "merchant";
 };
-
