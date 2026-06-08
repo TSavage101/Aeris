@@ -5,7 +5,8 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const pathname = searchParams.get("path") || "/";
-    const result = await bootstrapStateForPath(pathname);
+    const freshGuest = searchParams.get("fresh") === "1";
+    const result = await bootstrapStateForPath(pathname, { freshGuest });
     const response = NextResponse.json({ state: result.state, kind: result.kind });
 
     if (result.kind === "guest") {
@@ -20,4 +21,3 @@ export async function GET(request: Request) {
     );
   }
 }
-

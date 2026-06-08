@@ -151,7 +151,7 @@ export async function getOrCreateGuestSession() {
   return createGuestSession();
 }
 
-export async function bootstrapStateForPath(pathname: string) {
+export async function bootstrapStateForPath(pathname: string, options?: { freshGuest?: boolean }) {
   const cookieStore = await cookies();
   const authToken = cookieStore.get(AUTH_COOKIE)?.value;
   const guestToken = cookieStore.get(GUEST_COOKIE)?.value;
@@ -179,7 +179,7 @@ export async function bootstrapStateForPath(pathname: string) {
     }
   }
 
-  const guestSession = guestToken ? await findSession(guestToken) : null;
+  const guestSession = options?.freshGuest ? null : guestToken ? await findSession(guestToken) : null;
   const ensuredGuest = guestSession
     ? { token: guestSession.token, state: normalizeSessionState(guestSession.state_json) }
     : await createGuestSession();

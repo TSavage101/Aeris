@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import type { CSSProperties, InputHTMLAttributes } from "react";
 import type { CartLine, CheckoutDetails, Order, OrderStatus, PayoutRequest, Product, ProductSource, Store, SupportedCity } from "@/lib/aeris";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -331,8 +332,13 @@ function isEmailTaken(state: State, email: string) {
     .some((candidate) => candidate?.trim().toLowerCase() === normalized);
 }
 
-async function bootstrapStateFromServer(pathname: string) {
-  const response = await fetch(`/api/session/bootstrap?path=${encodeURIComponent(pathname)}`, {
+async function bootstrapStateFromServer(pathname: string, options?: { fresh?: boolean }) {
+  const params = new URLSearchParams({ path: pathname });
+  if (options?.fresh) {
+    params.set("fresh", "1");
+  }
+
+  const response = await fetch(`/api/session/bootstrap?${params.toString()}`, {
     method: "GET",
     cache: "no-store"
   });
@@ -578,6 +584,7 @@ function StepIcon({ status }: { status: ThoughtStepStatus }) {
 export function AerisProduct() {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [state, setState] = useState<State>(initialState);
   const [hydrated, setHydrated] = useState(false);
   const [toast, setToast] = useState("");
@@ -586,8 +593,9 @@ export function AerisProduct() {
 
   useEffect(() => {
     let active = true;
+    const fresh = searchParams.get("fresh") === "1";
 
-    void bootstrapStateFromServer(pathname)
+    void bootstrapStateFromServer(pathname, { fresh })
       .then((nextState) => {
         if (active) {
           setState(nextState);
@@ -607,7 +615,7 @@ export function AerisProduct() {
     return () => {
       active = false;
     };
-  }, [pathname]);
+  }, [pathname, searchParams]);
 
   useEffect(() => {
     if (!hydrated) {
@@ -803,7 +811,7 @@ function Landing({ state, update, go, notify }: CommonProps) {
       draft: nextDraft,
       store: buildStore(nextDraft)
     }));
-    go("/onboarding");
+    go("/onboarding?fresh=1");
   }
 
   function startLeadOnboarding() {
@@ -823,7 +831,7 @@ function Landing({ state, update, go, notify }: CommonProps) {
       draft: nextDraft,
       store: buildStore(nextDraft)
     }));
-    go("/onboarding");
+    go("/onboarding?fresh=1");
   }
 
   return (
